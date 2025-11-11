@@ -9,7 +9,7 @@
     "start": "node server.js"
   },
   "engines": {
-    "node": "22.x"
+    "node": "18.x"
   },
   "keywords": [],
   "author": "",
