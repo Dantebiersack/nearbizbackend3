@@ -1,76 +1,59 @@
-const express = require("express");
-const router = express.Router();
-const { query } = require("../db");
-const { signJwt, decodeJwt } = require("../../utils/jwt");
+// src/routes/auth.route.js
+const { Router } = require("express");
+const db = require("../db");
+const { signJwt } = require("../utils/jwt"); // 👈 importa la función correcta
 
-// POST /api/auth/login
+const router = Router();
+
 router.post("/login", async (req, res) => {
   try {
-    const { userOrEmail, password } = req.body || {};
-    if (!userOrEmail || !password) {
-      return res.status(400).json({ message: "Body inválido: { userOrEmail, password }" });
-    }
+    const { userOrEmail, password } = req.body;
 
-    // Busca usuario activo por email o nombre
-    // Si tu columna es "contraseña_hash", cambia u."contrasena_hash" por u."contraseña_hash"
-    const sql = `
-      SELECT 
-        u.id_usuario      AS "IdUsuario",
-        u.nombre          AS "Nombre",
-        u.email           AS "Email",
-        u.contrasena_hash AS "ContrasenaHash",
-        u.id_rol          AS "IdRol",
-        u.estado          AS "Estado",
-        r.rol             AS "RolNombre"
+    const { rows } = await db.query(
+      `
+      SELECT u."id_usuario", u."nombre", u."email", r."rol"
       FROM "Usuarios" u
-      LEFT JOIN "Roles" r ON r.id_rol = u.id_rol
-      WHERE u.estado = true
-        AND (u.email = $1 OR u.nombre = $1)
+      JOIN "Roles" r ON r."id_rol" = u."id_rol"
+      WHERE (LOWER(u."email") = LOWER($1) OR LOWER(u."nombre") = LOWER($1))
+        AND u."contrasena_hash" = $2
+        AND u."estado" = TRUE
       LIMIT 1;
-    `;
-
-    const rs = await query(sql, [userOrEmail]);
-    const user = rs.rows[0];
-    if (!user) {
-      return res.status(401).json({ message: "Usuario o contraseña inválidos" });
-    }
-
-    // Comparación plana (igual que tu back actual)
-    if (user.ContrasenaHash !== password) {
-      return res.status(401).json({ message: "Usuario o contraseña inválidos" });
-    }
-
-    const rol = user.RolNombre || "negocio";
-
-    // JWT (1 día)
-    const token = signJwt({
-      sub: String(user.IdUsuario),
-      unique_name: user.Nombre,
-      role: rol,
-    });
-    const decoded = decodeJwt(token);
-    const expUnix = decoded?.payload?.exp ?? null;
-    const expira = expUnix ? new Date(expUnix * 1000).toISOString() : null;
-
-    // Guardar token (opcional)
-    await query(
-      `UPDATE public."Usuarios" SET token = $1 WHERE id_usuario = $2;`,
-      [token, user.IdUsuario]
+      `,
+      [userOrEmail, password]
     );
 
-    // Respuesta tal como tu front espera (PascalCase)
+    if (rows.length === 0) {
+      return res.status(401).json({ message: "Credenciales inválidas" });
+    }
+
+    const u = rows[0];
+
+    // No pongas "exp" manual si ya usas expiresIn en el helper
+    const token = signJwt({ sub: u.id_usuario, rol: u.rol });
+
+    // Si aún quieres regresar un ISO con la expiración:
+    const expSeconds = Math.floor(Date.now() / 1000) +
+                       (parseDuration(process.env.JWT_EXPIRES_IN || "1d"));
     return res.json({
       Token: token,
-      Expira: expira,
-      Nombre: user.Nombre,
-      IdUsuario: user.IdUsuario,
-      Rol: rol,
-      Email: user.Email,
+      Nombre: u.nombre,
+      Rol: u.rol,
+      IdUsuario: u.id_usuario,
+      Expira: new Date(expSeconds * 1000).toISOString(),
+      Email: u.email,
     });
   } catch (err) {
-    console.error("Login error:", err);
     return res.status(500).json({ message: "Login error", detail: String(err) });
   }
 });
+
+// util mínimo para convertir "1d" | "12h" | "3600" a segundos
+function parseDuration(v) {
+  if (/^\d+$/.test(v)) return parseInt(v, 10);      // "3600"
+  const m = /^(\d+)([smhd])$/.exec(v);              // "1d", "12h"
+  if (!m) return 86400;
+  const n = parseInt(m[1], 10);
+  return { s:1, m:60, h:3600, d:86400 }[m[2]] * n;
+}
 
 module.exports = router;

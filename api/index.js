@@ -1,7 +1,6 @@
 // api/index.js
-import serverless from "serverless-http";
-import app from "../src/app.js";
+const app = require("../src/app");
 
-// Vercel requiere export default de una función (req,res)
-// serverless-http adapta Express a ese handler
-export default serverless(app);
+// Vercel espera una función (req, res)
+// Express es compatible: podemos pasar app como handler.
+module.exports = (req, res) => app(req, res);

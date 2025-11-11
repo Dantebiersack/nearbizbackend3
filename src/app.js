@@ -1,13 +1,26 @@
-import express from "express";
-import cors from "cors";
-import authRoutes from "./routes/auth.route.js";
+// src/app.js (CommonJS)
+const express = require("express");
+const cors = require("cors");
+const morgan = require("morgan");
+
+const authRoutes = require("./routes/auth.route");
 
 const app = express();
 
-app.use(cors({ origin: true, credentials: true }));
+// Middlewares
 app.use(express.json());
+app.use(morgan("dev"));
+app.use(
+  cors({
+    origin: (process.env.ALLOW_ORIGIN || "*").split(","),
+    credentials: false,
+  })
+);
 
-app.get("/api/health", (_req, res) => res.json({ ok: true }));
+// Health
+app.get("/api/health", (req, res) => res.json({ ok: true }));
+
+// Rutas de tu API
 app.use("/api/auth", authRoutes);
 
-export default app;
+module.exports = app;

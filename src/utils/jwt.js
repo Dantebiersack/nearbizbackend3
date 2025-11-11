@@ -1,18 +1,18 @@
 // utils/jwt.js
-const jwt = require("jsonwebtoken");
+const jsonwebtoken = require("jsonwebtoken");
 
 function signJwt(payload) {
   const key = process.env.JWT_KEY;
   const opts = {
     issuer: process.env.JWT_ISSUER,
     audience: process.env.JWT_AUDIENCE,
-    expiresIn: "1d", // 1 día, como en C#
+    expiresIn: process.env.JWT_EXPIRES_IN || "1d",
   };
-  return jwt.sign(payload, key, opts);
+  return jsonwebtoken.sign(payload, key, opts);
 }
 
 function decodeJwt(token) {
-  return jwt.decode(token, { complete: true });
+  return jsonwebtoken.decode(token, { complete: true });
 }
 
 module.exports = { signJwt, decodeJwt };
