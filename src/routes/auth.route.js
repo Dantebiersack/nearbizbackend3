@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const { query } = require("../db");
-const { signJwt, decodeJwt } = require("../utils/jwt");
+const { signJwt, decodeJwt } = require("../../utils/jwt");
 
 // POST /api/auth/login
 router.post("/login", async (req, res) => {

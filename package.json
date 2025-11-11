@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "dev": "node server.js",
+    "dev": "node --watch src/server.local.js",
     "start": "node server.js"
   },
   "keywords": [],
@@ -13,12 +13,13 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@vercel/node": "^2.15.10",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
     "jsonwebtoken": "^9.0.2",
     "morgan": "^1.10.1",
-    "mssql": "^12.1.0",
-    "pg": "^8.16.3"
+    "pg": "^8.16.3",
+    "serverless-http": "^3.2.0"
   }
 }
