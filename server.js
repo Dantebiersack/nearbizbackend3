@@ -11,18 +11,15 @@ const app = express();
 app.use(express.json());
 app.use(morgan("dev"));
 
-app.use(
-  cors({
-    origin: (origin, cb) => {
-      const allow = process.env.ALLOW_ORIGIN
-        ? process.env.ALLOW_ORIGIN.split(",").map(s => s.trim())
-        : ["*"];
-      if (allow.includes("*") || !origin || allow.includes(origin)) return cb(null, true);
-      cb(new Error("CORS not allowed"));
-    },
-    credentials: true,
-  })
-);
+app.use(cors({
+  origin: (() => {
+    if (!allowOrigin) return false;           // bloquear si no se configuró
+    if (allowOrigin === "*") return true;     // refleja el origin de la petición (sirve con credenciales)
+    const list = allowOrigin.split(",").map(s => s.trim()).filter(Boolean);
+    return list;
+  })(),
+  credentials: true, // pon true si vas a usar cookies/autorización; si no, puedes dejar false
+}));
 
 app.get("/api/health", (_, res) => res.json({ ok: true, env: process.env.NODE_ENV || "dev" }));
 
