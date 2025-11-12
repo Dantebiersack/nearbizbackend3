@@ -10,7 +10,7 @@ const app = express();
 
 app.use(express.json());
 app.use(morgan("dev"));
-
+allowOrigin = "*";
 app.use(cors({
   origin: (() => {
     if (!allowOrigin) return false;           // bloquear si no se configuró

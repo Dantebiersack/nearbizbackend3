@@ -8,6 +8,11 @@ const usuariosRoutes = require("./routes/usuarios.route");
 const valoracionesRoutes = require("./routes/valoraciones.route");
 const membresiasRoutes = require("./routes/membresias.route");
 
+const clientesRoutes = require("./routes/clientes.route");
+const serviciosRoutes = require("./routes/servicios.route");
+const citasRoutes = require("./routes/citas.route");
+const promocionesRoutes = require("./routes/promociones.route");
+
 const app = express();
 
 // ---------- CORS “siempre abierto” ----------
@@ -65,6 +70,11 @@ app.use("/api/auth", authRoutes);
 app.use("/api/Usuarios", usuariosRoutes);
 app.use("/api/Valoraciones", valoracionesRoutes);
 app.use("/api/Membresias", membresiasRoutes);
+
+app.use("/api/Clientes", clientesRoutes);
+app.use("/api/Servicios", serviciosRoutes);
+app.use("/api/Citas", citasRoutes);
+app.use("/api/Promociones", promocionesRoutes);
 
 // 404
 app.use((req, res) => res.status(404).json({ message: "Not found" }));
