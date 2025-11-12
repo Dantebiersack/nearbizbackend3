@@ -161,40 +161,50 @@ router.post("/", /*authRequired, allowRoles("adminNearbiz"),*/ async (req, res) 
 // PUT /api/Membresias/:id
 // body: { PrecioMensual?, IdNegocio, UltimaRenovacion? }
 // ==========================================================
+// src/routes/membresias.route.js (PUT /:id)
 router.put("/:id", /*authRequired, allowRoles("adminNearbiz"),*/ async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const { PrecioMensual, IdNegocio, UltimaRenovacion } = req.body || {};
+    const { PrecioMensual, IdNegocio, UltimaRenovacion } = req.body ?? {};
 
     const { rows } = await db.query(
       `
-      UPDATE "Membresias"
-      SET "precio_mensual"=$1,
-          "id_negocio"=$2,
-          "ultima_renovacion"=$3
-      WHERE "id_membresia"=$4
-      RETURNING "id_membresia","precio_mensual","id_negocio","estado","ultima_renovacion";
-    `,
+      UPDATE "Membresias" m
+      SET
+        "precio_mensual"   = COALESCE($1, m."precio_mensual"),
+        "id_negocio"       = COALESCE($2, m."id_negocio"),
+        "ultima_renovacion"= COALESCE($3, m."ultima_renovacion")
+      WHERE m."id_membresia" = $4
+      RETURNING
+        m."id_membresia", m."precio_mensual", m."estado",
+        m."ultima_renovacion",
+        n."id_negocio", n."nombre" AS negocio_nombre
+      ;
+      `,
       [
         PrecioMensual ?? null,
-        IdNegocio,
-        UltimaRenovacion ? new Date(UltimaRenovacion) : null,
+        IdNegocio ?? null,
+        UltimaRenovacion ?? null,
         id,
       ]
     );
+
     if (!rows.length) return res.status(404).json({ message: "No encontrado" });
 
-    // (Opcional) mantener FK en Negocios.id_membresia
-    await db.query(
-      `UPDATE "Negocios" SET "id_membresia"=$1 WHERE "id_negocio"=$2;`,
-      [id, IdNegocio]
-    );
-
-    return res.json(mapRow(rows[0]));
+    const r = rows[0];
+    return res.json({
+      IdMembresia: r.id_membresia,
+      PrecioMensual: r.precio_mensual,
+      Estado: r.estado,
+      UltimaRenovacion: r.ultima_renovacion,
+      IdNegocio: r.id_negocio,
+      NombreNegocio: r.negocio_nombre,
+    });
   } catch (e) {
-    return res.status(500).json({ message: "Error", detail: String(e) });
+    return res.status(500).json({ message: "Error actualizando", detail: String(e) });
   }
 });
+
 
 // ==========================================================
 // DELETE (soft) /api/Membresias/:id  -> estado=false
