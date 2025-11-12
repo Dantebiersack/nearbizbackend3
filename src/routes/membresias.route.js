@@ -174,6 +174,7 @@ router.put("/:id", async (req, res) => {
       SET
         "precio_mensual" = COALESCE($1, m."precio_mensual"),
         "id_negocio"     = COALESCE($2, m."id_negocio")
+        FROM "Negocios" AS n
       WHERE m."id_membresia" = $3
       RETURNING
         m."id_membresia", m."precio_mensual", m."estado",
