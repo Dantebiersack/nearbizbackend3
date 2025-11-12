@@ -162,48 +162,41 @@ router.post("/", /*authRequired, allowRoles("adminNearbiz"),*/ async (req, res) 
 // body: { PrecioMensual?, IdNegocio, UltimaRenovacion? }
 // ==========================================================
 // src/routes/membresias.route.js (PUT /:id)
-router.put("/:id", /*authRequired, allowRoles("adminNearbiz"),*/ async (req, res) => {
+// src/routes/membresias.route.js
+router.put("/:id", async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const { PrecioMensual, IdNegocio, UltimaRenovacion } = req.body ?? {};
+    const { PrecioMensual, IdNegocio } = req.body ?? {};
 
     const { rows } = await db.query(
       `
       UPDATE "Membresias" m
       SET
-        "precio_mensual"   = COALESCE($1, m."precio_mensual"),
-        "id_negocio"       = COALESCE($2, m."id_negocio"),
-        "ultima_renovacion"= COALESCE($3, m."ultima_renovacion")
-      WHERE m."id_membresia" = $4
+        "precio_mensual" = COALESCE($1, m."precio_mensual"),
+        "id_negocio"     = COALESCE($2, m."id_negocio")
+      WHERE m."id_membresia" = $3
       RETURNING
         m."id_membresia", m."precio_mensual", m."estado",
-        m."ultima_renovacion",
         n."id_negocio", n."nombre" AS negocio_nombre
       ;
       `,
-      [
-        PrecioMensual ?? null,
-        IdNegocio ?? null,
-        UltimaRenovacion ?? null,
-        id,
-      ]
+      [PrecioMensual ?? null, IdNegocio ?? null, id]
     );
 
     if (!rows.length) return res.status(404).json({ message: "No encontrado" });
-
     const r = rows[0];
-    return res.json({
+    res.json({
       IdMembresia: r.id_membresia,
       PrecioMensual: r.precio_mensual,
       Estado: r.estado,
-      UltimaRenovacion: r.ultima_renovacion,
       IdNegocio: r.id_negocio,
       NombreNegocio: r.negocio_nombre,
     });
   } catch (e) {
-    return res.status(500).json({ message: "Error actualizando", detail: String(e) });
+    res.status(500).json({ message: "Error actualizando", detail: String(e) });
   }
 });
+
 
 
 // ==========================================================
