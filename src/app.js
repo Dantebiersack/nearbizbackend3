@@ -13,6 +13,7 @@ const serviciosRoutes = require("./routes/servicios.route");
 const citasRoutes = require("./routes/citas.route");
 const promocionesRoutes = require("./routes/promociones.route");
 const personalRoutes = require("./routes/personal.route");
+const negociosRoutes = require("./routes/negocios.route");
 
 const app = express();
 
@@ -77,6 +78,7 @@ app.use("/api/Servicios", serviciosRoutes);
 app.use("/api/Citas", citasRoutes);
 app.use("/api/Promociones", promocionesRoutes);
 app.use("/api/Personal", personalRoutes);
+app.use("/api/Negocios", negociosRoutes);
 
 
 
