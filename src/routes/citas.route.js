@@ -2,6 +2,7 @@
 const { Router } = require("express");
 const db = require("../db");
 const router = Router();
+const { decodeJwt } = require("../utils/jwt");
 
 const mapCita = (c) => ({
   IdCita: c.id_cita,
@@ -15,11 +16,132 @@ const mapCita = (c) => ({
   MotivoCancelacion: c.motivo_cancelacion,
 });
 
+function getUserFromAuthHeader(req) {
+  const auth = req.headers.authorization || "";
+
+  const parts = auth.split(" ");
+
+  if (parts.length !== 2 || parts[0] !== "Bearer") {
+    console.warn("Authorization mal formado o vacío");
+    return null;
+  }
+
+  const token = parts[1];
+
+  // decodeJwt({ complete:true }) => { header, payload, signature }
+  const decoded = decodeJwt(token);
+  if (!decoded || !decoded.payload) {
+    console.error("decodeJwt no devolvió payload");
+    return null;
+  }
+
+  const payload = decoded.payload; // 👈 aquí viene { sub, rol, iat, exp, ... }
+
+  console.log("JWT payload (decode) >>>", payload);
+
+  // en el login hiciste: signJwt({ sub: userId, rol: u.rol })
+  const idUsuario = Number(payload.sub);
+  const rol = payload.rol;
+
+  if (!idUsuario || !rol) {
+    console.error("Payload sin sub/rol válidos");
+    return null;
+  }
+
+  return { idUsuario, rol };
+}
+
+function mapCitaRow(row) {
+  return {
+    idCita: row.id_cita,
+    idCliente: row.id_cliente,
+    idTecnico: row.id_tecnico,
+    idServicio: row.id_servicio,
+    fechaCita: row.fecha_cita,
+    horaInicio: row.hora_inicio,
+    horaFin: row.hora_fin,
+    estado: row.estado,
+    motivoCancelacion: row.motivo_cancelacion,
+    negocioId: row.id_negocio,
+    negocioNombre: row.negocio_nombre,
+    clienteNombre: row.cliente_nombre,
+    tecnicoNombre: row.tecnico_nombre,
+    servicioNombre: row.servicio_nombre,
+  };
+}
+
+router.get("/by-role", async function (req, res) {
+  try {
+    const auth = getUserFromAuthHeader(req);
+
+    if (!auth) {
+      return res.status(401).json({
+        message: "Token ausente o inválido en Authorization",
+      });
+    }
+
+    const rol = auth.rol;         // "adminNearbiz" | "adminNegocio" | "personal"
+    const idUsuario = auth.idUsuario;
+
+    console.log("Usuario desde JWT >>>", { idUsuario, rol });
+
+    var where = "";
+    var params = [];
+
+    if (rol === "adminNearbiz") {
+      where = "";
+      params = [];
+    } else if (rol === "adminNegocio") {
+      // Ajusta esta parte a tu modelo real.
+      where = 'WHERE neg."id_usuario_admin" = $1';
+      params = [idUsuario];
+    } else if (rol === "personal") {
+      where = 'WHERE tec."id_usuario" = $1';
+      params = [idUsuario];
+    } else {
+      return res
+        .status(403)
+        .json({ message: "Rol sin permiso para consultar citas" });
+    }
+
+    const sql =
+      'SELECT ' +
+      '  ci."id_cita",' +
+      '  ci."id_cliente",' +
+      '  ci."id_tecnico",' +
+      '  ci."id_servicio",' +
+      '  ci."fecha_cita",' +
+      '  ci."hora_inicio",' +
+      '  ci."hora_fin",' +
+      '  ci."estado",' +
+      '  ci."motivo_cancelacion",' +
+      '  neg."id_negocio",' +
+      '  neg."nombre"            AS negocio_nombre,' +
+      '  u_cli."nombre"          AS cliente_nombre,' +
+      '  u_tec."nombre"          AS tecnico_nombre,' +
+      '  s."nombre_servicio"     AS servicio_nombre ' +
+      'FROM "Citas" ci ' +
+      'JOIN "Servicios" s   ON s."id_servicio"   = ci."id_servicio" ' +
+      'JOIN "Personal" tec  ON tec."id_personal" = ci."id_tecnico" ' +
+      'JOIN "Negocios" neg  ON neg."id_negocio"  = tec."id_negocio" ' +
+      'JOIN "Clientes" cli  ON cli."id_cliente"  = ci."id_cliente" ' +
+      'JOIN "Usuarios" u_cli ON u_cli."id_usuario" = cli."id_usuario" ' +
+      'JOIN "Usuarios" u_tec ON u_tec."id_usuario" = tec."id_usuario" ' +
+      (where || "") +
+      ' ORDER BY ci."fecha_cita", ci."hora_inicio"';
+
+    const result = await db.query(sql, params);
+    const rows = result.rows || [];
+
+    return res.json(rows.map(mapCita));
+  } catch (e) {
+    console.error("Error en GET /Citas/by-role:", e);
+    return res.status(500).json({ message: "Error", detail: String(e) });
+  }
+});
 router.get("/", async (req, res) => {
   try {
     const includeInactive = String(req.query.includeInactive || "false") === "true";
-    // Para Citas asumo "inactividad" = estado <> 'cancelada' ? Si tienes columna estado boolean, cámbialo.
-    // Para mantener patrón, si no hay flag, no filtro por estado y muestro todas.
     const idCliente = req.query.idCliente ? Number(req.query.idCliente) : null;
     const idTecnico = req.query.idTecnico ? Number(req.query.idTecnico) : null;
 
@@ -35,6 +157,8 @@ router.get("/", async (req, res) => {
     res.json(rows.map(mapCita));
   } catch (e) { res.status(500).json({ message: "Error", detail: String(e) }); }
 });
+
+
 
 router.get("/:id", async (req, res) => {
   try {
@@ -104,5 +228,58 @@ router.patch("/:id/cancel", async (req, res) => {
     res.status(204).end();
   } catch (e) { res.status(500).json({ message: "Error", detail: String(e) }); }
 });
+
+router.patch("/:id/approve", /*authRequired,*/ async function (req, res) {
+  try {
+    var id = Number(req.params.id);
+    if (!id || !Number.isInteger(id)) {
+      return res.status(400).json({ message: "Id de cita inválido" });
+    }
+
+    // Opcional: podrías validar aquí que el estado actual no sea "cancelada"
+    // con un SELECT previo, pero para mantenerlo simple hacemos solo UPDATE.
+
+    var upd = await db.query(
+      'UPDATE "Citas" ' +
+        'SET "estado" = $2, ' +
+        '    "motivo_cancelacion" = NULL, ' +
+        '    "fecha_actualizacion" = NOW() ' +
+        'WHERE "id_cita" = $1 ' +
+        'RETURNING ' +
+        '  "id_cita",' +
+        '  "id_cliente",' +
+        '  "id_tecnico",' +
+        '  "id_servicio",' +
+        '  "fecha_cita",' +
+        '  "hora_inicio",' +
+        '  "hora_fin",' +
+        '  "estado",' +
+        '  "motivo_cancelacion";',
+      [id, "atendida"]
+    );
+
+    if (upd.rowCount === 0) {
+      return res.status(404).json({ message: "Cita no encontrada" });
+    }
+
+    var row = upd.rows[0];
+
+    return res.json({
+      idCita: row.id_cita,
+      idCliente: row.id_cliente,
+      idTecnico: row.id_tecnico,
+      idServicio: row.id_servicio,
+      fechaCita: row.fecha_cita,
+      horaInicio: row.hora_inicio,
+      horaFin: row.hora_fin,
+      estado: row.estado,
+      motivoCancelacion: row.motivo_cancelacion,
+    });
+  } catch (e) {
+    console.error("Error en PATCH /Citas/:id/approve:", e);
+    return res.status(500).json({ message: "Error", detail: String(e) });
+  }
+});
+
 
 module.exports = router;
