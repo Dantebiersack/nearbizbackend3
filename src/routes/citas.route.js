@@ -281,5 +281,111 @@ router.patch("/:id/approve", /*authRequired,*/ async function (req, res) {
   }
 });
 
+////
+// Confirmar o rechazar cita, y enviar notificación Expo
+router.patch("/:id/estatus", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const { estatus, motivo } = req.body;
+
+    if (!["confirmada", "rechazada"].includes(estatus)) {
+      return res.status(400).json({
+        message: "Estatus no válido. Usa 'confirmada' o 'rechazada'."
+      });
+    }
+
+    // 1. Obtener datos de la cita
+    const citaQuery = await db.query(
+      `SELECT "id_cliente","id_tecnico","id_servicio","fecha_cita","hora_inicio","hora_fin","estado"
+       FROM "Citas"
+       WHERE "id_cita"=$1`,
+      [id]
+    );
+
+    if (!citaQuery.rows.length) {
+      return res.status(404).json({ message: "Cita no encontrada" });
+    }
+
+    const cita = citaQuery.rows[0];
+
+    // 2. Actualizar cita en BD
+    await db.query(
+      `UPDATE "Citas"
+       SET "estado"=$1,
+           "motivo_cancelacion"=$2
+       WHERE "id_cita"=$3`,
+      [
+        estatus,
+        estatus === "rechazada" ? motivo || "Sin motivo" : null,
+        id
+      ]
+    );
+
+    // 3. Obtener id_usuario y token del cliente (SIMPLIFICADO)
+    const clienteQuery = await db.query(
+      `SELECT cli."id_cliente", cli."id_usuario", u."token"
+       FROM "Clientes" cli
+       JOIN "Usuarios" u ON u."id_usuario" = cli."id_usuario"
+       WHERE cli."id_cliente"=$1`,
+      [cita.id_cliente]
+    );
+
+    if (!clienteQuery.rows.length) {
+      return res.status(404).json({ message: "Usuario cliente no encontrado" });
+    }
+
+    const cliente = clienteQuery.rows[0];
+    const pushToken = cliente.token;
+    const idUsuario = cliente.id_usuario;
+
+    // 4. Enviar notificación Expo usando el id_usuario como referencia
+    if (pushToken) {
+      try {
+        const tituloNotificacion = estatus === "confirmada" 
+          ? "Cita Confirmada" 
+          : "Cita Rechazada";
+        
+        const mensajeNotificacion = estatus === "confirmada"
+          ? "Tu cita ha sido confirmada. ¡Prepárate para tu servicio!"
+          : `Motivo: ${motivo || "No especificado"}`;
+
+        await fetch("https://exp.host/--/api/v2/push/send", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            to: pushToken,
+            title: tituloNotificacion,
+            body: mensajeNotificacion,
+            sound: "default",
+            data: { 
+              idCita: id, 
+              idUsuario: idUsuario, // Ahora incluimos el id_usuario
+              estatus: estatus,
+              tipo: 'cita_estatus'
+            }
+          })
+        });
+        
+        console.log(`Notificación enviada a usuario ${idUsuario}`);
+        
+      } catch (notiError) {
+        console.error("Error enviando notificación Expo:", notiError);
+      }
+    }
+
+    return res.json({
+      message: `Cita ${estatus}`,
+      idCita: id,
+      idUsuario: idUsuario, // Devolvemos el id_usuario en la respuesta
+      notificado: !!pushToken
+    });
+  } catch (e) {
+    console.error("Error en PATCH /citas/:id/estatus:", e);
+    return res.status(500).json({ message: "Error", detail: String(e) });
+  }
+});
+
 
 module.exports = router;
