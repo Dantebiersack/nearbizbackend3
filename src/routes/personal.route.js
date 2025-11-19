@@ -2,51 +2,89 @@
 const { Router } = require("express");
 const db = require("../db");
 const { created, noContent } = require("../utils/respond");
-
+const { decodeJwt } = require("../utils/jwt"); 
 
 const router = Router();
+
+function getUserFromAuthHeader(req) {
+  const auth = req.headers.authorization || "";
+  const parts = auth.split(" ");
+  if (parts.length !== 2 || parts[0] !== "Bearer") return null;
+  const token = parts[1];
+  const decoded = decodeJwt(token);
+  if (!decoded || !decoded.payload) return null;
+  
+  const payload = decoded.payload;
+  const idUsuario = Number(payload.sub);
+  const rol = payload.rol;
+  if (!idUsuario) return null;
+  return { idUsuario, rol };
+}
+
+async function getMyBusinessId(idUsuario) {
+  const res = await db.query(
+    `SELECT "id_negocio" FROM "Personal" WHERE "id_usuario"=$1 LIMIT 1`,
+    [idUsuario]
+  );
+  return res.rows.length ? res.rows[0].id_negocio : null;
+}
 
 
 router.get("/", async (req, res) => {
   try {
-    const includeInactive = (req.query.includeInactive || "false").toLowerCase() === "true";
-  
-    const idNegocio = req.query.idNegocio ? Number(req.query.idNegocio) : null;
+    const user = getUserFromAuthHeader(req);
+    if (!user) return res.status(401).json({ message: "Token inválido" });
 
- 
-    let q = `SELECT "id_personal", "id_usuario", "id_negocio", "rol_en_negocio", "fecha_registro", "estado" 
-             FROM "Personal"`;
+    let targetIdNegocio = null;
+
+   
+    if (user.rol === "adminNegocio" || user.rol === "personal") {
+      targetIdNegocio = await getMyBusinessId(user.idUsuario);
+      if (!targetIdNegocio) return res.json([]); 
+    } else if (user.rol === "adminNearbiz" && req.query.idNegocio) {
+      targetIdNegocio = Number(req.query.idNegocio);
+    } else {
+      return res.status(403).json({ message: "Rol no autorizado" });
+    }
+
+    const includeInactive = (req.query.includeInactive || "false").toLowerCase() === "true";
+    let q = `
+      SELECT 
+        p."id_personal", p."id_usuario", p."id_negocio", p."rol_en_negocio", 
+        p."fecha_registro", p."estado",
+        u."nombre" as nombre_usuario,
+        u."email" as email_usuario
+      FROM "Personal" p
+      JOIN "Usuarios" u ON p."id_usuario" = u."id_usuario"
+    `;
     
     const params = [];
     const whereClauses = [];
 
-    if (!includeInactive) {
-      whereClauses.push(`"estado" = TRUE`);
+    if (!includeInactive) whereClauses.push(`p."estado" = TRUE`);
+    
+    if (targetIdNegocio) {
+      params.push(targetIdNegocio);
+      whereClauses.push(`p."id_negocio" = $${params.length}`);
     }
 
-    if (idNegocio) {
-      params.push(idNegocio);
-      whereClauses.push(`"id_negocio" = $${params.length}`);
-    }
-
-    if (whereClauses.length > 0) {
-      q += " WHERE " + whereClauses.join(" AND ");
-    }
+    if (whereClauses.length > 0) q += " WHERE " + whereClauses.join(" AND ");
     
-    q += ' ORDER BY "id_personal";';
-    
+    q += ' ORDER BY p."id_personal";';
 
     const { rows } = await db.query(q, params);
 
-    
     const data = rows.map(r => ({
       IdPersonal: r.id_personal,
       IdUsuario: r.id_usuario,
       IdNegocio: r.id_negocio,
       RolEnNegocio: r.rol_en_negocio,
       FechaRegistro: r.fecha_registro,
-      Estado: r.estado
+      Estado: r.estado,
+      Nombre: r.nombre_usuario,
+      Email: r.email_usuario
     }));
+
     return res.json(data);
 
   } catch (e) {
@@ -54,40 +92,27 @@ router.get("/", async (req, res) => {
   }
 });
 
-
-router.get("/:id(\\d+)", async (req, res) => {
-  try {
-    const id = Number(req.params.id);
-    const { rows } = await db.query(
-      `SELECT "id_personal", "id_usuario", "id_negocio", "rol_en_negocio", "fecha_registro", "estado"
-       FROM "Personal" WHERE "id_personal"=$1;`,
-      [id]
-    );
-    if (!rows.length) return res.status(404).json({ message: "Not found" });
-    const r = rows[0];
-    return res.json({
-      IdPersonal: r.id_personal,
-      IdUsuario: r.id_usuario,
-      IdNegocio: r.id_negocio,
-      RolEnNegocio: r.rol_en_negocio,
-      FechaRegistro: r.fecha_registro,
-      Estado: r.estado
-    });
-  } catch (e) {
-    return res.status(500).json({ message: "Error", detail: String(e) });
-  }
-});
-
-
 router.post("/", async (req, res) => {
   try {
+    const user = getUserFromAuthHeader(req);
+    if (!user) return res.status(401).json({ message: "Token inválido" });
+
     const dto = req.body; 
+    let finalIdNegocio = dto.IdNegocio;
+
+   
+    if (user.rol === "adminNegocio") {
+      finalIdNegocio = await getMyBusinessId(user.idUsuario);
+      if (!finalIdNegocio) return res.status(400).json({ message: "No tienes un negocio asignado" });
+    }
+
     const ins = await db.query(
       `INSERT INTO "Personal"("id_usuario", "id_negocio", "rol_en_negocio", "estado", "fecha_registro")
        VALUES($1, $2, $3, TRUE, CURRENT_TIMESTAMP)
        RETURNING "id_personal", "id_usuario", "id_negocio", "rol_en_negocio", "fecha_registro", "estado";`,
-      [dto.IdUsuario, dto.IdNegocio, dto.RolEnNegocio]
+      [dto.IdUsuario, finalIdNegocio, dto.RolEnNegocio]
     );
+ 
     const e = ins.rows[0];
     const body = {
       IdPersonal: e.id_personal,
@@ -103,61 +128,47 @@ router.post("/", async (req, res) => {
   }
 });
 
-
+// PUT update
 router.put("/:id(\\d+)", async (req, res) => {
-  try {
-    const id = Number(req.params.id);
-    const dto = req.body; 
-    await db.query(
-      `UPDATE "Personal" SET "id_usuario"=$1, "id_negocio"=$2, "rol_en_negocio"=$3
-       WHERE "id_personal"=$4;`,
-      [dto.IdUsuario, dto.IdNegocio, dto.RolEnNegocio, id]
-    );
-    return noContent(res);
-  } catch (e) {
-    return res.status(500).json({ message: "Error", detail: String(e) });
-  }
+    try {
+      const id = Number(req.params.id);
+      const dto = req.body; 
+      // Solo actualizamos Rol (y ids si se envían, aunque idealmente no se deberían cambiar de negocio así)
+      // Para simplificar, permitimos actualizar rol.
+      await db.query(
+        `UPDATE "Personal" SET "rol_en_negocio"=$1 WHERE "id_personal"=$2;`,
+        [dto.RolEnNegocio, id]
+      );
+      return noContent(res);
+    } catch (e) {
+      return res.status(500).json({ message: "Error", detail: String(e) });
+    }
 });
 
-
+// DELETE soft delete
 router.delete("/:id(\\d+)", async (req, res) => {
   try {
     const id = Number(req.params.id);
-    
-    
     const { rows } = await db.query('SELECT "id_usuario" FROM "Personal" WHERE "id_personal"=$1;', [id]);
-    
-    
     await db.query(`UPDATE "Personal" SET "estado"=FALSE WHERE "id_personal"=$1;`, [id]);
-
-    
     if (rows.length) {
-      const idUsuario = rows[0].id_usuario;
-      await db.query(`UPDATE "Usuarios" SET "estado"=FALSE WHERE "id_usuario"=$1;`, [idUsuario]);
+      await db.query(`UPDATE "Usuarios" SET "estado"=FALSE WHERE "id_usuario"=$1;`, [rows[0].id_usuario]);
     }
-    
     return noContent(res);
   } catch (e) {
     return res.status(500).json({ message: "Error", detail: String(e) });
   }
 });
 
-
+// PATCH restore
 router.patch("/:id(\\d+)/restore", async (req, res) => {
   try {
     const id = Number(req.params.id);
-
-
     const { rows } = await db.query('SELECT "id_usuario" FROM "Personal" WHERE "id_personal"=$1;', [id]);
-
     await db.query(`UPDATE "Personal" SET "estado"=TRUE WHERE "id_personal"=$1;`, [id]);
-    
-    
     if (rows.length) {
-      const idUsuario = rows[0].id_usuario;
-      await db.query(`UPDATE "Usuarios" SET "estado"=TRUE WHERE "id_usuario"=$1;`, [idUsuario]);
+      await db.query(`UPDATE "Usuarios" SET "estado"=TRUE WHERE "id_usuario"=$1;`, [rows[0].id_usuario]);
     }
-
     return noContent(res);
   } catch (e) {
     return res.status(500).json({ message: "Error", detail: String(e) });
