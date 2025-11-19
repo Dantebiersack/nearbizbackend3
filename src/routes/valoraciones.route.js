@@ -1,20 +1,27 @@
-// src/routes/valoraciones.route.js
 const { Router } = require("express");
 const db = require("../db");
 const { created, noContent } = require("../utils/respond");
 
 const router = Router();
 
-// GET /api/Valoraciones?includeInactive=false
-router.get("/", async (req, res) => {
+/* -------------------------------------------
+   NUEVA RUTA:
+   GET /api/Valoraciones/Negocio/:idNegocio
+   Para obtener SOLO las valoraciones de ese negocio
+-------------------------------------------- */
+router.get("/Negocio/:idNegocio", async (req, res) => {
   try {
-    const includeInactive = (req.query.includeInactive || "false").toLowerCase() === "true";
-    const q = includeInactive
-      ? `SELECT "id_valoracion","id_cita","id_cliente","id_negocio","calificacion","comentario","fecha","estado"
-         FROM "Valoraciones" ORDER BY "id_valoracion";`
-      : `SELECT "id_valoracion","id_cita","id_cliente","id_negocio","calificacion","comentario","fecha","estado"
-         FROM "Valoraciones" WHERE "estado"=TRUE ORDER BY "id_valoracion";`;
-    const { rows } = await db.query(q);
+    const idNegocio = Number(req.params.idNegocio);
+
+    const { rows } = await db.query(
+      `SELECT "id_valoracion","id_cita","id_cliente","id_negocio",
+              "calificacion","comentario","fecha","estado"
+       FROM "Valoraciones"
+       WHERE "estado" = TRUE AND "id_negocio" = $1
+       ORDER BY "fecha" DESC;`,
+      [idNegocio]
+    );
+
     const data = rows.map(v => ({
       IdValoracion: v.id_valoracion,
       IdCita: v.id_cita,
@@ -25,13 +32,65 @@ router.get("/", async (req, res) => {
       Fecha: v.fecha,
       Estado: v.estado
     }));
+
     return res.json(data);
   } catch (e) {
     return res.status(500).json({ message: "Error", detail: String(e) });
   }
 });
 
-// GET /api/Valoraciones/{id}
+/* -------------------------------------------
+   RUTA ORIGINAL GET /api/Valoraciones (opcional)
+-------------------------------------------- */
+router.get("/", async (req, res) => {
+  try {
+    const includeInactive = (req.query.includeInactive || "false").toLowerCase() === "true";
+    const idNegocio = req.query.idNegocio ? Number(req.query.idNegocio) : null;
+
+    let q = `
+      SELECT "id_valoracion","id_cita","id_cliente","id_negocio",
+             "calificacion","comentario","fecha","estado"
+      FROM "Valoraciones"
+      WHERE 1 = 1
+    `;
+
+    const params = [];
+    let index = 1;
+
+    if (!includeInactive) {
+      q += ` AND "estado" = TRUE `;
+    }
+
+    if (idNegocio) {
+      q += ` AND "id_negocio" = $${index} `;
+      params.push(idNegocio);
+      index++;
+    }
+
+    q += ` ORDER BY "id_valoracion";`;
+
+    const { rows } = await db.query(q, params);
+
+    const data = rows.map(v => ({
+      IdValoracion: v.id_valoracion,
+      IdCita: v.id_cita,
+      IdCliente: v.id_cliente,
+      IdNegocio: v.id_negocio,
+      Calificacion: v.calificacion,
+      Comentario: v.comentario,
+      Fecha: v.fecha,
+      Estado: v.estado
+    }));
+
+    return res.json(data);
+  } catch (e) {
+    return res.status(500).json({ message: "Error", detail: String(e) });
+  }
+});
+
+/* -------------------------------------------
+   GET por id
+-------------------------------------------- */
 router.get("/:id(\\d+)", async (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -57,10 +116,12 @@ router.get("/:id(\\d+)", async (req, res) => {
   }
 });
 
-// POST /api/Valoraciones
+/* -------------------------------------------
+   POST crear
+-------------------------------------------- */
 router.post("/", async (req, res) => {
   try {
-    const dto = req.body; // { IdCita, IdCliente, IdNegocio, Calificacion, Comentario }
+    const dto = req.body;
     const ins = await db.query(
       `INSERT INTO "Valoraciones"
         ("id_cita","id_cliente","id_negocio","calificacion","comentario","estado")
@@ -84,11 +145,13 @@ router.post("/", async (req, res) => {
   }
 });
 
-// PUT /api/Valoraciones/{id}
+/* -------------------------------------------
+   PUT actualizar
+-------------------------------------------- */
 router.put("/:id(\\d+)", async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const dto = req.body; // { Calificacion, Comentario }
+    const dto = req.body;
     await db.query(
       `UPDATE "Valoraciones" SET "calificacion"=$1,"comentario"=$2 WHERE "id_valoracion"=$3;`,
       [dto.Calificacion, dto.Comentario ?? null, id]
@@ -99,7 +162,9 @@ router.put("/:id(\\d+)", async (req, res) => {
   }
 });
 
-// DELETE soft
+/* -------------------------------------------
+   DELETE soft
+-------------------------------------------- */
 router.delete("/:id(\\d+)", async (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -110,7 +175,9 @@ router.delete("/:id(\\d+)", async (req, res) => {
   }
 });
 
-// PATCH restore
+/* -------------------------------------------
+   RESTORE
+-------------------------------------------- */
 router.patch("/:id(\\d+)/restore", async (req, res) => {
   try {
     const id = Number(req.params.id);
