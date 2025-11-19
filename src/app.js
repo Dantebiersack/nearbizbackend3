@@ -81,7 +81,7 @@ app.use("/api/Promociones", promocionesRoutes);
 app.use("/api/Personal", personalRoutes);
 app.use("/api/Negocios", negociosRoutes);
 app.use("/api/Categorias", categoriasRoutes);
-app.use("/api/Valoraciones", valoracionesRoutes);
+
 
 
 
