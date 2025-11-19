@@ -1,4 +1,4 @@
-
+//ARCHIVO DE NEGOCIO DE PARTE DE BACK PARA CORROBORAR ACAPTACION O RECHAZO DE LAS SOLICITUDES DE EMMPRESAS 
 const { Router } = require("express");
 const db = require("../db");
 const { created, noContent } = require("../utils/respond");
@@ -139,6 +139,40 @@ router.patch("/:id(\\d+)/restore", async (req, res) => {
   try {
     const id = Number(req.params.id);
     await db.query(`UPDATE "Negocios" SET "estado"=TRUE WHERE "id_negocio"=$1;`, [id]);
+    return noContent(res);
+  } catch (e) {
+    return res.status(500).json({ message: "Error", detail: String(e) });
+  }
+});
+
+
+// -----------------------------------------------------
+//  NUEVOS ENDPOINTS PARA APROBAR O RECHAZAR SOLICITUDES
+//  editado Alondra Martínez para manejo de solicitudes
+// -----------------------------------------------------
+
+// PATCH aprobar negocio
+router.patch("/:id(\\d+)/approve", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    await db.query(
+      `UPDATE "Negocios" SET "estado"=TRUE WHERE "id_negocio"=$1;`,
+      [id]
+    );
+    return noContent(res);
+  } catch (e) {
+    return res.status(500).json({ message: "Error", detail: String(e) });
+  }
+});
+
+// PATCH rechazar negocio
+router.patch("/:id(\\d+)/reject", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    await db.query(
+      `UPDATE "Negocios" SET "estado"=FALSE WHERE "id_negocio"=$1;`,
+      [id]
+    );
     return noContent(res);
   } catch (e) {
     return res.status(500).json({ message: "Error", detail: String(e) });
