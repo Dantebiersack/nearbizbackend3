@@ -35,7 +35,7 @@ async function getMyBusinessId(idUsuario) {
   return res.rows.length ? res.rows[0].id_negocio : null;
 }
 
-// --- GET: Listar empleados (ESTE SÍ REQUIERE TOKEN) ---
+// --- GET: Listar empleados (Seguro y Rápido con JOIN) ---
 router.get("/", async (req, res) => {
   try {
     const user = getUserFromAuthHeader(req);
@@ -46,14 +46,14 @@ router.get("/", async (req, res) => {
     // 1. Determinar el Negocio
     if (user.rol === "adminNegocio" || user.rol === "personal") {
       targetIdNegocio = await getMyBusinessId(user.idUsuario);
-      if (!targetIdNegocio) return res.json([]); // No tiene negocio
+      if (!targetIdNegocio) return res.json([]);
     } else if (user.rol === "adminNearbiz" && req.query.idNegocio) {
       targetIdNegocio = Number(req.query.idNegocio);
     } else {
       return res.status(403).json({ message: "Rol no autorizado" });
     }
 
-    // 2. Query con JOIN
+    // 2. Query con JOIN a Usuarios
     const includeInactive = (req.query.includeInactive || "false").toLowerCase() === "true";
     let q = `
       SELECT 
@@ -99,17 +99,29 @@ router.get("/", async (req, res) => {
   }
 });
 
-// --- POST create: Vincular empleado (HÍBRIDO: CON O SIN TOKEN) ---
+// --- POST create: Vincular empleado ---
 router.post("/", async (req, res) => {
   try {
-
     const user = getUserFromAuthHeader(req);
-    
     const dto = req.body; 
+    
+   
     let finalIdNegocio = dto.IdNegocio;
+
+ 
     if (user && user.rol === "adminNegocio") {
-      finalIdNegocio = await getMyBusinessId(user.idUsuario);
-      if (!finalIdNegocio) return res.status(400).json({ message: "No tienes un negocio asignado" });
+      const existingBusinessId = await getMyBusinessId(user.idUsuario);
+      
+      if (existingBusinessId) {
+    
+        finalIdNegocio = existingBusinessId;
+      }
+    
+    }
+
+
+    if (!finalIdNegocio) {
+        return res.status(400).json({ message: "Error: No se proporcionó un ID de Negocio válido." });
     }
 
     const ins = await db.query(
