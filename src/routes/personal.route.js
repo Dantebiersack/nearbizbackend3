@@ -1,4 +1,3 @@
-
 const { Router } = require("express");
 const db = require("../db");
 const { created, noContent } = require("../utils/respond");
@@ -6,21 +5,28 @@ const { decodeJwt } = require("../utils/jwt");
 
 const router = Router();
 
+// --- Helper para extraer usuario del Token ---
 function getUserFromAuthHeader(req) {
   const auth = req.headers.authorization || "";
   const parts = auth.split(" ");
+  
   if (parts.length !== 2 || parts[0] !== "Bearer") return null;
+  
   const token = parts[1];
   const decoded = decodeJwt(token);
+  
   if (!decoded || !decoded.payload) return null;
   
   const payload = decoded.payload;
   const idUsuario = Number(payload.sub);
   const rol = payload.rol;
+
   if (!idUsuario) return null;
+
   return { idUsuario, rol };
 }
 
+// --- Helper para obtener el ID Negocio del Admin ---
 async function getMyBusinessId(idUsuario) {
   const res = await db.query(
     `SELECT "id_negocio" FROM "Personal" WHERE "id_usuario"=$1 LIMIT 1`,
@@ -29,7 +35,7 @@ async function getMyBusinessId(idUsuario) {
   return res.rows.length ? res.rows[0].id_negocio : null;
 }
 
-
+// --- GET: Listar empleados (ESTE SÍ REQUIERE TOKEN) ---
 router.get("/", async (req, res) => {
   try {
     const user = getUserFromAuthHeader(req);
@@ -37,16 +43,17 @@ router.get("/", async (req, res) => {
 
     let targetIdNegocio = null;
 
-   
+    // 1. Determinar el Negocio
     if (user.rol === "adminNegocio" || user.rol === "personal") {
       targetIdNegocio = await getMyBusinessId(user.idUsuario);
-      if (!targetIdNegocio) return res.json([]); 
+      if (!targetIdNegocio) return res.json([]); // No tiene negocio
     } else if (user.rol === "adminNearbiz" && req.query.idNegocio) {
       targetIdNegocio = Number(req.query.idNegocio);
     } else {
       return res.status(403).json({ message: "Rol no autorizado" });
     }
 
+    // 2. Query con JOIN
     const includeInactive = (req.query.includeInactive || "false").toLowerCase() === "true";
     let q = `
       SELECT 
@@ -92,16 +99,15 @@ router.get("/", async (req, res) => {
   }
 });
 
+// --- POST create: Vincular empleado (HÍBRIDO: CON O SIN TOKEN) ---
 router.post("/", async (req, res) => {
   try {
-    const user = getUserFromAuthHeader(req);
-    if (!user) return res.status(401).json({ message: "Token inválido" });
 
+    const user = getUserFromAuthHeader(req);
+    
     const dto = req.body; 
     let finalIdNegocio = dto.IdNegocio;
-
-   
-    if (user.rol === "adminNegocio") {
+    if (user && user.rol === "adminNegocio") {
       finalIdNegocio = await getMyBusinessId(user.idUsuario);
       if (!finalIdNegocio) return res.status(400).json({ message: "No tienes un negocio asignado" });
     }
@@ -112,7 +118,7 @@ router.post("/", async (req, res) => {
        RETURNING "id_personal", "id_usuario", "id_negocio", "rol_en_negocio", "fecha_registro", "estado";`,
       [dto.IdUsuario, finalIdNegocio, dto.RolEnNegocio]
     );
- 
+    
     const e = ins.rows[0];
     const body = {
       IdPersonal: e.id_personal,
@@ -128,13 +134,11 @@ router.post("/", async (req, res) => {
   }
 });
 
-// PUT update
+// --- PUT update ---
 router.put("/:id(\\d+)", async (req, res) => {
     try {
       const id = Number(req.params.id);
       const dto = req.body; 
-      // Solo actualizamos Rol (y ids si se envían, aunque idealmente no se deberían cambiar de negocio así)
-      // Para simplificar, permitimos actualizar rol.
       await db.query(
         `UPDATE "Personal" SET "rol_en_negocio"=$1 WHERE "id_personal"=$2;`,
         [dto.RolEnNegocio, id]
@@ -145,7 +149,7 @@ router.put("/:id(\\d+)", async (req, res) => {
     }
 });
 
-// DELETE soft delete
+// --- DELETE soft delete ---
 router.delete("/:id(\\d+)", async (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -160,7 +164,7 @@ router.delete("/:id(\\d+)", async (req, res) => {
   }
 });
 
-// PATCH restore
+// --- PATCH restore ---
 router.patch("/:id(\\d+)/restore", async (req, res) => {
   try {
     const id = Number(req.params.id);
