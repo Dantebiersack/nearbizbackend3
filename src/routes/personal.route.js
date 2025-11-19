@@ -35,6 +35,51 @@ async function getMyBusinessId(idUsuario) {
   return res.rows.length ? res.rows[0].id_negocio : null;
 }
 
+
+// --- NUEVO ENDPOINT PARA MIRANDA---
+router.get("/by-negocio/:idNegocio(\\d+)", async (req, res) => {
+  try {
+    const idNegocio = Number(req.params.idNegocio);
+    const includeInactive = (req.query.includeInactive || "false").toLowerCase() === "true";
+
+    let q = `
+      SELECT 
+        p."id_personal", p."id_usuario", p."id_negocio", p."rol_en_negocio", 
+        p."fecha_registro", p."estado",
+        u."nombre" as nombre_usuario,
+        u."email" as email_usuario
+      FROM "Personal" p
+      JOIN "Usuarios" u ON p."id_usuario" = u."id_usuario"
+      WHERE p."id_negocio" = $1
+    `;
+
+    if (!includeInactive) {
+      q += ` AND p."estado" = TRUE`;
+    }
+    
+    q += ' ORDER BY p."id_personal";';
+
+    const { rows } = await db.query(q, [idNegocio]);
+
+    const data = rows.map(r => ({
+      IdPersonal: r.id_personal,
+      IdUsuario: r.id_usuario,
+      IdNegocio: r.id_negocio,
+      RolEnNegocio: r.rol_en_negocio,
+      FechaRegistro: r.fecha_registro,
+      Estado: r.estado,
+      Nombre: r.nombre_usuario,
+      Email: r.email_usuario
+    }));
+
+    return res.json(data);
+
+  } catch (e) {
+    return res.status(500).json({ message: "Error", detail: String(e) });
+  }
+});
+// ---  FIN DEL ENDPOINT DE MIRANDA ---
+
 // --- GET: Listar empleados (Seguro y Rápido con JOIN) ---
 router.get("/", async (req, res) => {
   try {
