@@ -283,10 +283,11 @@ router.patch("/:id/approve", /*authRequired,*/ async function (req, res) {
 
 ////
 // Confirmar o rechazar cita, y enviar notificación Expo
+// Confirmar o rechazar cita, y enviar notificación Expo
 router.patch("/:id/estatus", async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const { estatus, motivo, idUsuario } = req.body; // Ahora recibimos idUsuario desde el body
+    const { estatus, motivo } = req.body;
 
     if (!["confirmada", "rechazada"].includes(estatus)) {
       return res.status(400).json({
@@ -294,28 +295,16 @@ router.patch("/:id/estatus", async (req, res) => {
       });
     }
 
-    // Verificar que el idUsuario sea 4 (cliente)
-    if (idUsuario !== 4) {
-      return res.status(403).json({
-        message: "Solo los usuarios con id 4 (clientes) pueden cambiar el estatus de citas."
-      });
-    }
-
-    // 1. Obtener datos de la cita usando idUsuario en lugar de idCliente
+    // 1. Obtener datos de la cita
     const citaQuery = await db.query(
-      `SELECT c."id_cita", c."id_cliente", c."id_tecnico", c."id_servicio", 
-              c."fecha_cita", c."hora_inicio", c."hora_fin", c."estado",
-              cli."id_usuario"
-       FROM "Citas" c
-       JOIN "Clientes" cli ON c."id_cliente" = cli."id_cliente"
-       WHERE c."id_cita"=$1 AND cli."id_usuario"=$2`,
-      [id, idUsuario]
+      `SELECT "id_cliente","id_tecnico","id_servicio","fecha_cita","hora_inicio","hora_fin","estado"
+       FROM "Citas"
+       WHERE "id_cita"=$1`,
+      [id]
     );
 
     if (!citaQuery.rows.length) {
-      return res.status(404).json({ 
-        message: "Cita no encontrada o no tienes permisos para modificarla" 
-      });
+      return res.status(404).json({ message: "Cita no encontrada" });
     }
 
     const cita = citaQuery.rows[0];
@@ -333,27 +322,29 @@ router.patch("/:id/estatus", async (req, res) => {
       ]
     );
 
-    // 3. Obtener token del usuario (cliente con id 4)
-    const usuarioQuery = await db.query(
-      `SELECT u."id_usuario", u."token"
-       FROM "Usuarios" u
-       WHERE u."id_usuario"=$1`,
-      [idUsuario]
+    // 3. Obtener id_usuario y token del cliente (SIMPLIFICADO)
+    const clienteQuery = await db.query(
+      `SELECT cli."id_cliente", cli."id_usuario", u."token"
+       FROM "Clientes" cli
+       JOIN "Usuarios" u ON u."id_usuario" = cli."id_usuario"
+       WHERE cli."id_cliente"=$1`,
+      [cita.id_cliente]
     );
 
-    if (!usuarioQuery.rows.length) {
-      return res.status(404).json({ message: "Usuario no encontrado" });
+    if (!clienteQuery.rows.length) {
+      return res.status(404).json({ message: "Usuario cliente no encontrado" });
     }
 
-    const usuario = usuarioQuery.rows[0];
-    const pushToken = usuario.token;
+    const cliente = clienteQuery.rows[0];
+    const pushToken = cliente.token;
+    const idUsuario = cliente.id_usuario;
 
-    // 4. Enviar notificación Expo
+    // 4. Enviar notificación Expo usando el id_usuario como referencia
     if (pushToken) {
       try {
         const tituloNotificacion = estatus === "confirmada" 
-          ? "Cita Confirmada" 
-          : "Cita Rechazada";
+          ? "¡Cita Confirmada! ✅" 
+          : "Cita Rechazada ❌";
         
         const mensajeNotificacion = estatus === "confirmada"
           ? "Tu cita ha sido confirmada. ¡Prepárate para tu servicio!"
@@ -371,24 +362,24 @@ router.patch("/:id/estatus", async (req, res) => {
             sound: "default",
             data: { 
               idCita: id, 
-              idUsuario: idUsuario,
+              idUsuario: idUsuario, // ✅ Ahora incluimos el id_usuario
               estatus: estatus,
               tipo: 'cita_estatus'
             }
           })
         });
         
-        console.log(`Notificación enviada a usuario ${idUsuario}`);
+        console.log(`📱 Notificación enviada a usuario ${idUsuario}`);
         
       } catch (notiError) {
-        console.error("Error enviando notificación Expo:", notiError);
+        console.error("❌ Error enviando notificación Expo:", notiError);
       }
     }
 
     return res.json({
       message: `Cita ${estatus}`,
       idCita: id,
-      idUsuario: idUsuario,
+      idUsuario: idUsuario, // ✅ Devolvemos el id_usuario en la respuesta
       notificado: !!pushToken
     });
   } catch (e) {
@@ -396,6 +387,5 @@ router.patch("/:id/estatus", async (req, res) => {
     return res.status(500).json({ message: "Error", detail: String(e) });
   }
 });
-
 
 module.exports = router;
