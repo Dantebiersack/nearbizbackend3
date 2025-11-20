@@ -122,4 +122,55 @@ router.patch("/:id(\\d+)/restore", async (req, res) => {
   }
 });
 
+// Cambia la ruta a /registroapp
+router.post("/registroapp", async (req, res) => {
+  try {
+    const dto = req.body;
+    
+    // 1. Insertar usuario
+    const ins = await db.query(
+      `INSERT INTO "Usuarios"("nombre","email","contrasena_hash","id_rol","estado","token")
+       VALUES($1,$2,$3,$4,TRUE,$5)
+       RETURNING "id_usuario","nombre","email","id_rol","fecha_registro","estado","token";`,
+      [dto.Nombre, dto.Email, dto.ContrasenaHash, dto.IdRol, dto.Token || null]
+    );
+    
+    const e = ins.rows[0];
+    const body = {
+      IdUsuario: e.id_usuario,
+      Nombre: e.nombre,
+      Email: e.email,
+      IdRol: e.id_rol,
+      FechaRegistro: e.fecha_registro,
+      Estado: e.estado,
+      Token: e.token
+    };
+
+    // 2. Si el rol es 4 (cliente), crear registro en tabla Clientes
+    if (dto.IdRol === 4) {
+      const clienteIns = await db.query(
+        `INSERT INTO "Clientes" ("id_usuario", "estado")
+         VALUES ($1, TRUE)
+         RETURNING "id_cliente", "id_usuario", "estado"`,
+        [e.id_usuario]
+      );
+      
+      const cliente = clienteIns.rows[0];
+      console.log(`✅ Cliente creado - ID Cliente: ${cliente.id_cliente}, ID Usuario: ${cliente.id_usuario}`);
+      
+      body.Cliente = {
+        IdCliente: cliente.id_cliente,
+        IdUsuario: cliente.id_usuario,
+        Estado: cliente.estado
+      };
+    }
+    
+    return created(res, `/api/registroapp/${e.id_usuario}`, body);
+  } catch (e) {
+    console.error('Error al crear usuario:', e);
+    return res.status(500).json({ message: "Error", detail: String(e) });
+  }
+});
+
+
 module.exports = router;
