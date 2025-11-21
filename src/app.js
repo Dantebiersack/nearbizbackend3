@@ -70,7 +70,7 @@ app.use(morgan("dev"));
 app.get("/api/health", (_, res) => res.json({ ok: true }));
 
 app.use("/api/auth", authRoutes);
-app.use("/api", usuariosRoutes);
+app.use("/api/Usuarios", usuariosRoutes);
 app.use("/api/Valoraciones", valoracionesRoutes);
 app.use("/api/Membresias", membresiasRoutes);
 
