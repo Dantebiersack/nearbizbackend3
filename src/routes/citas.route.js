@@ -158,44 +158,6 @@ router.get("/", async (req, res) => {
   } catch (e) { res.status(500).json({ message: "Error", detail: String(e) }); }
 });
 
-router.post("/debug-sql", async (req, res) => {
-  try {
-    const { query } = req.body;
-
-    if (!query || typeof query !== "string") {
-      return res.status(400).json({ message: "Falta el campo 'query' en el cuerpo de la petición" });
-    }
-
-    const trimmed = query.trim();
-
-    if (!/^select\s+/i.test(trimmed)) {
-      return res.status(400).json({ message: "Solo se permiten consultas SELECT para pruebas" });
-    }
-
-    const forbidden = /(insert|update|delete|drop|alter|truncate|grant|revoke|create|execute|;)/i;
-    if (forbidden.test(trimmed)) {
-      return res.status(400).json({ message: "La consulta contiene instrucciones no permitidas" });
-    }
-
-    let safeQuery = trimmed;
-    if (!/limit\s+\d+/i.test(trimmed)) {
-      safeQuery = trimmed + " LIMIT 200";
-    }
-
-    const { rows } = await db.query(safeQuery);
-    return res.json({
-      query: safeQuery,
-      rowCount: rows.length,
-      rows,
-    });
-  } catch (e) {
-    console.error("Error en /debug-sql:", e);
-    return res.status(500).json({
-      message: "Error ejecutando la consulta",
-      detail: String(e),
-    });
-  }
-});
 
 
 router.get("/:id", async (req, res) => {
@@ -209,6 +171,7 @@ router.get("/:id", async (req, res) => {
   } catch (e) { res.status(500).json({ message: "Error", detail: String(e) }); }
 });
 
+// NUEVA (USAR ESTA - corregida)
 router.post("/", async (req, res) => {
   try {
     const {
@@ -216,18 +179,43 @@ router.post("/", async (req, res) => {
       fechaCita, horaInicio, horaFin, estado, motivoCancelacion
     } = req.body;
 
+    //  VALIDACIÓN EN BACKEND
+    const solapamientoQuery = await db.query(
+      `SELECT id_cita FROM "Citas" 
+       WHERE id_tecnico = $1 
+       AND fecha_cita = $2 
+       AND estado NOT IN ('cancelada', 'rechazada')
+       AND (hora_inicio, hora_fin) OVERLAPS ($3::time, $4::time)`,
+      [idTecnico, fechaCita, horaInicio, horaFin]
+    );
+
+    if (solapamientoQuery.rows.length > 0) {
+      return res.status(409).json({ 
+        message: "El técnico ya tiene una cita programada en este horario",
+        detail: "Por favor, elige otro horario o técnico"
+      });
+    }
+
+    // INSERTAR CORRECTAMENTE
     const { rows } = await db.query(
       `INSERT INTO "Citas"
-       ("id_cliente","id_tecnico","id_servicio","fecha_cita","hora_inicio","hora_fin","estado","motivo_cancelacion")
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+       ("id_cliente", "id_tecnico", "id_servicio", "fecha_cita", "hora_inicio", "hora_fin", "estado", "motivo_cancelacion")
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING *`,
       [
         idCliente, idTecnico, idServicio,
-        fechaCita, horaInicio, horaFin, estado || "pendiente", motivoCancelacion || null
+        fechaCita, horaInicio, horaFin, 
+        estado || "pendiente", 
+        motivoCancelacion || null
       ]
     );
+    
     res.status(201).json(mapCita(rows[0]));
-  } catch (e) { res.status(500).json({ message: "Error", detail: String(e) }); }
+    
+  } catch (e) { 
+    console.error('Error en POST /citas:', e);
+    res.status(500).json({ message: "Error", detail: String(e) }); 
+  }
 });
 
 router.put("/:id", async (req, res) => {
@@ -381,8 +369,8 @@ router.patch("/:id/estatus", async (req, res) => {
     if (pushToken) {
       try {
         const tituloNotificacion = estatus === "confirmada" 
-          ? "¡Cita Confirmada! ✅" 
-          : "Cita Rechazada ❌";
+          ? "¡Cita Confirmada! " 
+          : "Cita Rechazada ";
         
         const mensajeNotificacion = estatus === "confirmada"
           ? "Tu cita ha sido confirmada. ¡Prepárate para tu servicio!"
@@ -400,7 +388,7 @@ router.patch("/:id/estatus", async (req, res) => {
             sound: "default",
             data: { 
               idCita: id, 
-              idUsuario: idUsuario, // ✅ Ahora incluimos el id_usuario
+              idUsuario: idUsuario, // Ahora incluimos el id_usuario
               estatus: estatus,
               tipo: 'cita_estatus'
             }
@@ -417,7 +405,7 @@ router.patch("/:id/estatus", async (req, res) => {
     return res.json({
       message: `Cita ${estatus}`,
       idCita: id,
-      idUsuario: idUsuario, // ✅ Devolvemos el id_usuario en la respuesta
+      idUsuario: idUsuario, // Devolvemos el id_usuario en la respuesta
       notificado: !!pushToken
     });
   } catch (e) {
