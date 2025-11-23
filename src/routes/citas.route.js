@@ -398,7 +398,7 @@ router.patch("/:id/estatus", async (req, res) => {
         console.log(`📱 Notificación enviada a usuario ${idUsuario}`);
         
       } catch (notiError) {
-        console.error("❌ Error enviando notificación Expo:", notiError);
+        console.error(" Error enviando notificación Expo:", notiError);
       }
     }
 
