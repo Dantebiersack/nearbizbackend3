@@ -184,54 +184,115 @@ router.patch("/:id(\\d+)/reject", async (req, res) => {
 // --- GET MiNegocio (usuario logueado)
 router.get("/MiNegocio", async (req, res) => {
   try {
-    const auth = getUserFromAuthHeader(req);
+    const auth = getUserFromAuthHeader(req); // obtiene usuario desde token
     if (!auth) return res.status(401).json({ message: "No autenticado" });
     if (auth.rol !== "adminNegocio") return res.status(403).json({ message: "Acceso denegado" });
 
+    // Definimos las columnas que queremos traer de la tabla "Negocios"
+    const COLS = `
+      id_negocio, id_categoria, id_membresia, nombre, direccion,
+      coordenadas_lat, coordenadas_lng, descripcion,
+      telefono_contacto, correo_contacto, horario_atencion, linkUrl
+    `;
+
     const q = `SELECT ${COLS} FROM "Negocios" WHERE "id_usuario"=$1 LIMIT 1;`;
     const { rows } = await db.query(q, [auth.idUsuario]);
+
     if (!rows.length) return res.json(null);
+
+    // Función para mapear la fila de la base de datos a DTO
+    const mapToDto = (row) => ({
+      IdNegocio: row.id_negocio,
+      IdCategoria: row.id_categoria,
+      IdMembresia: row.id_membresia,
+      Nombre: row.nombre,
+      Direccion: row.direccion,
+      CoordenadasLat: row.coordenadas_lat,
+      CoordenadasLng: row.coordenadas_lng,
+      Descripcion: row.descripcion,
+      TelefonoContacto: row.telefono_contacto,
+      CorreoContacto: row.correo_contacto,
+      HorarioAtencion: row.horario_atencion,
+      LinkUrl: row.linkurl
+    });
+
     return res.json(mapToDto(rows[0]));
+
   } catch (e) {
-    return res.status(500).json({ message: "Error", detail: String(e) });
+    console.error("ERROR en /MiNegocio:", e);
+    return res.status(500).json({ message: "Error interno", detail: String(e) });
   }
 });
+
 
 // --- PUT MiNegocio (usuario logueado)
 router.put("/MiNegocio", async (req, res) => {
   try {
-    const auth = getUserFromAuthHeader(req);
+    const auth = getUserFromAuthHeader(req); // obtiene usuario desde token
     if (!auth) return res.status(401).json({ message: "No autenticado" });
     if (auth.rol !== "adminNegocio") return res.status(403).json({ message: "Acceso denegado" });
 
     const dto = req.body;
-    await db.query(
-      `UPDATE "Negocios" SET 
-        "id_categoria"=$1, "id_membresia"=$2, "nombre"=$3, "direccion"=$4,
-        "coordenadas_lat"=$5, "coordenadas_lng"=$6, "descripcion"=$7,
-        "telefono_contacto"=$8, "correo_contacto"=$9, "horario_atencion"=$10,
-        "linkUrl"=$11
-      WHERE "id_usuario"=$12;`,
-      [
-        dto.IdCategoria,
-        dto.IdMembresia || null,
-        dto.Nombre,
-        dto.Direccion || null,
-        dto.CoordenadasLat || null,
-        dto.CoordenadasLng || null,
-        dto.Descripcion || null,
-        dto.TelefonoContacto || null,
-        dto.CorreoContacto || null,
-        dto.HorarioAtencion || null,
-        dto.LinkUrl || null,
-        auth.idUsuario
-      ]
-    );
 
-    return res.json({ message: "Actualizado correctamente" });
+    const q = `
+      UPDATE "Negocios" SET 
+        "id_categoria" = $1,
+        "id_membresia" = $2,
+        "nombre" = $3,
+        "direccion" = $4,
+        "coordenadas_lat" = $5,
+        "coordenadas_lng" = $6,
+        "descripcion" = $7,
+        "telefono_contacto" = $8,
+        "correo_contacto" = $9,
+        "horario_atencion" = $10,
+        "linkUrl" = $11
+      WHERE "id_usuario" = $12
+      RETURNING *;
+    `;
+
+    const values = [
+      dto.IdCategoria,
+      dto.IdMembresia || null,
+      dto.Nombre,
+      dto.Direccion || null,
+      dto.CoordenadasLat || null,
+      dto.CoordenadasLng || null,
+      dto.Descripcion || null,
+      dto.TelefonoContacto || null,
+      dto.CorreoContacto || null,
+      dto.HorarioAtencion || null,
+      dto.LinkUrl || null,
+      auth.idUsuario
+    ];
+
+    const { rows } = await db.query(q, values);
+
+    if (!rows.length) return res.status(404).json({ message: "Negocio no encontrado" });
+
+    // Mismo mapeo que el GET
+    const mapToDto = (row) => ({
+      IdNegocio: row.id_negocio,
+      IdCategoria: row.id_categoria,
+      IdMembresia: row.id_membresia,
+      Nombre: row.nombre,
+      Direccion: row.direccion,
+      CoordenadasLat: row.coordenadas_lat,
+      CoordenadasLng: row.coordenadas_lng,
+      Descripcion: row.descripcion,
+      TelefonoContacto: row.telefono_contacto,
+      CorreoContacto: row.correo_contacto,
+      HorarioAtencion: row.horario_atencion,
+      LinkUrl: row.linkurl
+    });
+
+    return res.json({ message: "Actualizado correctamente", negocio: mapToDto(rows[0]) });
+
   } catch (e) {
-    return res.status(500).json({ message: "Error", detail: String(e) });
+    console.error("ERROR en PUT /MiNegocio:", e);
+    return res.status(500).json({ message: "Error interno", detail: String(e) });
   }
 });
+
 
 module.exports = router;
