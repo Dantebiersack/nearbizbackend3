@@ -181,82 +181,77 @@ router.patch("/:id(\\d+)/reject", async (req, res) => {
   }
 });
 
-// --- GET MiNegocio seguro
+
+
+// --- GET MiNegocio unificado
 router.get("/MiNegocio", async (req, res) => {
   try {
     const auth = getUserFromAuthHeader(req);
     if (!auth) return res.status(401).json({ message: "No autenticado" });
-    if (!auth.rol.includes("adminNegocio")) return res.status(403).json({ message: "Acceso denegado" });
 
-    console.log("[DEBUG] Usuario logueado:", auth);
+    let idNegocio = null;
 
-    const q = `
-      SELECT 
-        id_negocio, id_categoria, id_membresia, nombre, direccion,
-        coordenadas_lat, coordenadas_lng, descripcion,
-        telefono_contacto, correo_contacto, horario_atencion, linkUrl
-      FROM "Negocios"
-      WHERE "id_usuario" = $1
-      LIMIT 1;
-    `;
-    const { rows } = await db.query(q, [auth.idUsuario]);
-    console.log("[DEBUG] Filas obtenidas:", rows);
+    // Dependiendo del rol
+    if (auth.rol === "adminNegocio" || auth.rol === "personal") {
+      // Buscar id_negocio en Personal
+      const { rows: personalRows } = await db.query(
+        `SELECT "id_negocio" FROM "Personal" WHERE "id_usuario"=$1 LIMIT 1;`,
+        [auth.idUsuario]
+      );
+      if (!personalRows.length) return res.json(null);
+      idNegocio = personalRows[0].id_negocio;
 
-    if (!rows.length) return res.json(null); // No hay negocio, devuelve null
+    } else if (auth.rol === "adminNearbiz" && req.query.idNegocio) {
+      // Admin de la plataforma puede pasar idNegocio por query
+      idNegocio = Number(req.query.idNegocio);
+    } else {
+      return res.status(403).json({ message: "Rol no autorizado" });
+    }
 
-    const row = rows[0];
+    // Traer negocio
+    const { rows: negocioRows } = await db.query(
+      `SELECT ${COLS} FROM "Negocios" WHERE "id_negocio"=$1 LIMIT 1;`,
+      [idNegocio]
+    );
+    if (!negocioRows.length) return res.json(null);
 
-    const mapToDto = {
-      IdNegocio: row.id_negocio || 0,
-      IdCategoria: row.id_categoria || "",
-      IdMembresia: row.id_membresia || null,
-      Nombre: row.nombre || "",
-      Direccion: row.direccion || "",
-      CoordenadasLat: row.coordenadas_lat || "",
-      CoordenadasLng: row.coordenadas_lng || "",
-      Descripcion: row.descripcion || "",
-      TelefonoContacto: row.telefono_contacto || "",
-      CorreoContacto: row.correo_contacto || "",
-      HorarioAtencion: row.horario_atencion || "[]",
-      LinkUrl: row.linkUrl || ""
-    };
-
-    console.log("[DEBUG] DTO final:", mapToDto);
-
-    return res.json(mapToDto);
+    return res.json(mapToDto(negocioRows[0]));
 
   } catch (e) {
-    console.error("ERROR en /MiNegocio:", e);
     return res.status(500).json({ message: "Error interno", detail: String(e) });
   }
 });
 
-// --- PUT MiNegocio (usuario logueado) con debug
+// --- PUT MiNegocio unificado
 router.put("/MiNegocio", async (req, res) => {
   try {
     const auth = getUserFromAuthHeader(req);
     if (!auth) return res.status(401).json({ message: "No autenticado" });
-    if (auth.rol !== "adminNegocio") return res.status(403).json({ message: "Acceso denegado" });
 
-    console.log("[DEBUG] Usuario logueado para PUT:", auth);
+    let idNegocio = null;
+
+    if (auth.rol === "adminNegocio" || auth.rol === "personal") {
+      const { rows: personalRows } = await db.query(
+        `SELECT "id_negocio" FROM "Personal" WHERE "id_usuario"=$1 LIMIT 1;`,
+        [auth.idUsuario]
+      );
+      if (!personalRows.length) return res.status(404).json({ message: "No tienes un negocio vinculado" });
+      idNegocio = personalRows[0].id_negocio;
+
+    } else if (auth.rol === "adminNearbiz" && req.body.IdNegocio) {
+      idNegocio = Number(req.body.IdNegocio);
+    } else {
+      return res.status(403).json({ message: "Rol no autorizado" });
+    }
 
     const dto = req.body;
-    console.log("[DEBUG] DTO recibido:", dto);
 
     const q = `
-      UPDATE "Negocios" SET 
-        "id_categoria" = $1,
-        "id_membresia" = $2,
-        "nombre" = $3,
-        "direccion" = $4,
-        "coordenadas_lat" = $5,
-        "coordenadas_lng" = $6,
-        "descripcion" = $7,
-        "telefono_contacto" = $8,
-        "correo_contacto" = $9,
-        "horario_atencion" = $10,
-        "linkUrl" = $11
-      WHERE "id_usuario" = $12
+      UPDATE "Negocios" SET
+        "id_categoria"=$1, "id_membresia"=$2, "nombre"=$3, "direccion"=$4,
+        "coordenadas_lat"=$5, "coordenadas_lng"=$6, "descripcion"=$7,
+        "telefono_contacto"=$8, "correo_contacto"=$9, "horario_atencion"=$10, "linkUrl"=$11
+      WHERE "id_negocio"=$12
       RETURNING *;
     `;
 
@@ -272,40 +267,19 @@ router.put("/MiNegocio", async (req, res) => {
       dto.CorreoContacto || null,
       dto.HorarioAtencion || null,
       dto.LinkUrl || null,
-      auth.idUsuario
+      idNegocio
     ];
 
-    const { rows } = await db.query(q, values);
-    console.log("[DEBUG] Filas actualizadas:", rows);
+    const { rows: updatedRows } = await db.query(q, values);
+    if (!updatedRows.length) return res.status(404).json({ message: "Negocio no encontrado" });
 
-    if (!rows.length) return res.status(404).json({ message: "Negocio no encontrado" });
-
-    const row = rows[0];
-
-    const mapToDto = {
-      IdNegocio: row.id_negocio,
-      IdCategoria: row.id_categoria,
-      IdMembresia: row.id_membresia,
-      Nombre: row.nombre,
-      Direccion: row.direccion,
-      CoordenadasLat: row.coordenadas_lat,
-      CoordenadasLng: row.coordenadas_lng,
-      Descripcion: row.descripcion,
-      TelefonoContacto: row.telefono_contacto,
-      CorreoContacto: row.correo_contacto,
-      HorarioAtencion: row.horario_atencion,
-      LinkUrl: row.linkUrl
-    };
-
-    console.log("[DEBUG] DTO final actualizado:", mapToDto);
-
-    return res.json({ message: "Actualizado correctamente", negocio: mapToDto });
+    return res.json({ message: "Actualizado correctamente", negocio: mapToDto(updatedRows[0]) });
 
   } catch (e) {
-    console.error("ERROR en PUT /MiNegocio:", e);
     return res.status(500).json({ message: "Error interno", detail: String(e) });
   }
 });
+
 
 
 
