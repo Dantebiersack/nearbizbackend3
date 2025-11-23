@@ -1,4 +1,4 @@
-//ARCHIVO DE NEGOCIO DE PARTE DE BACK PARA CORROBORAR ACAPTACION O RECHAZO DE LAS SOLICITUDES DE EMMPRESAS 
+//ARCHIVO DE NEGOCIO DE PARTE DE BACK PARA CORROBORAR ACAPTACION O RECHAZO DE LAS SOLICITUDES DE EMPRESAS 
 const { Router } = require("express");
 const db = require("../db");
 const { created, noContent } = require("../utils/respond");
@@ -145,7 +145,6 @@ router.patch("/:id(\\d+)/restore", async (req, res) => {
   }
 });
 
-
 // -----------------------------------------------------
 //  NUEVOS ENDPOINTS PARA APROBAR O RECHAZAR SOLICITUDES
 //  editado Alondra Martínez para manejo de solicitudes
@@ -179,20 +178,17 @@ router.patch("/:id(\\d+)/reject", async (req, res) => {
   }
 });
 
-
-
-
 // OBTENER EL NEGOCIO DEL USUARIO LOGUEADO
 router.get("/MiNegocio", async (req, res) => {
   try {
-    const auth = req.user; // viene del token: IdUsuario, Rol, etc.
+    console.log("req.user:", req.user); // 🔹 depuración
+    const auth = req.user;
+    if (!auth) return res.status(401).json({ message: "No autenticado" });
 
-    // 1. Validar que sea negocio
     if (auth.rol !== "adminNegocio") {
       return res.status(403).json({ message: "Acceso denegado" });
     }
 
-    // 2. Buscar el negocio asociado al usuario logueado
     const q = `
       SELECT ${COLS}
       FROM "Negocios"
@@ -202,21 +198,19 @@ router.get("/MiNegocio", async (req, res) => {
 
     const { rows } = await db.query(q, [auth.idUsuario]);
 
-    if (!rows.length) {
-      return res.json(null); // no tiene negocio todavía
-    }
-
+    if (!rows.length) return res.json(null);
     return res.json(mapToDto(rows[0]));
 
   } catch (e) {
+    console.error("Error en GET /MiNegocio:", e);
     return res.status(500).json({ message: "Error", detail: String(e) });
   }
 });
 
-
 router.put("/MiNegocio", async (req, res) => {
   try {
     const auth = req.user;
+    if (!auth) return res.status(401).json({ message: "No autenticado" });
 
     if (auth.rol !== "adminNegocio") {
       return res.status(403).json({ message: "Acceso denegado" });
@@ -251,9 +245,9 @@ router.put("/MiNegocio", async (req, res) => {
     return res.json({ message: "Actualizado correctamente" });
 
   } catch (e) {
+    console.error("Error en PUT /MiNegocio:", e);
     return res.status(500).json({ message: "Error", detail: String(e) });
   }
 });
-
 
 module.exports = router;
