@@ -181,27 +181,34 @@ router.patch("/:id(\\d+)/reject", async (req, res) => {
   }
 });
 
-// --- GET MiNegocio (usuario logueado)
+// --- GET MiNegocio (usuario logueado) con debug
 router.get("/MiNegocio", async (req, res) => {
   try {
-    const auth = getUserFromAuthHeader(req); // obtiene usuario desde token
+    const auth = getUserFromAuthHeader(req);
     if (!auth) return res.status(401).json({ message: "No autenticado" });
     if (auth.rol !== "adminNegocio") return res.status(403).json({ message: "Acceso denegado" });
 
-    // Definimos las columnas que queremos traer de la tabla "Negocios"
+    console.log("[DEBUG] Usuario logueado:", auth);
+
     const COLS = `
       id_negocio, id_categoria, id_membresia, nombre, direccion,
       coordenadas_lat, coordenadas_lng, descripcion,
-      telefono_contacto, correo_contacto, horario_atencion, linkUrl
+      telefono_contacto, correo_contacto, horario_atencion, "linkUrl"
     `;
 
     const q = `SELECT ${COLS} FROM "Negocios" WHERE "id_usuario"=$1 LIMIT 1;`;
     const { rows } = await db.query(q, [auth.idUsuario]);
 
+    console.log("[DEBUG] Filas obtenidas de la DB:", rows);
+
     if (!rows.length) return res.json(null);
 
-    // Función para mapear la fila de la base de datos a DTO
-    const mapToDto = (row) => ({
+    const row = rows[0];
+
+    // Checamos si todas las columnas existen
+    console.log("[DEBUG] Row individual:", row);
+
+    const mapToDto = {
       IdNegocio: row.id_negocio,
       IdCategoria: row.id_categoria,
       IdMembresia: row.id_membresia,
@@ -213,10 +220,12 @@ router.get("/MiNegocio", async (req, res) => {
       TelefonoContacto: row.telefono_contacto,
       CorreoContacto: row.correo_contacto,
       HorarioAtencion: row.horario_atencion,
-      LinkUrl: row.linkurl
-    });
+      LinkUrl: row.linkUrl // Ojo: usar mayúscula exacta
+    };
 
-    return res.json(mapToDto(rows[0]));
+    console.log("[DEBUG] DTO final:", mapToDto);
+
+    return res.json(mapToDto);
 
   } catch (e) {
     console.error("ERROR en /MiNegocio:", e);
@@ -224,15 +233,17 @@ router.get("/MiNegocio", async (req, res) => {
   }
 });
 
-
-// --- PUT MiNegocio (usuario logueado)
+// --- PUT MiNegocio (usuario logueado) con debug
 router.put("/MiNegocio", async (req, res) => {
   try {
-    const auth = getUserFromAuthHeader(req); // obtiene usuario desde token
+    const auth = getUserFromAuthHeader(req);
     if (!auth) return res.status(401).json({ message: "No autenticado" });
     if (auth.rol !== "adminNegocio") return res.status(403).json({ message: "Acceso denegado" });
 
+    console.log("[DEBUG] Usuario logueado para PUT:", auth);
+
     const dto = req.body;
+    console.log("[DEBUG] DTO recibido:", dto);
 
     const q = `
       UPDATE "Negocios" SET 
@@ -267,11 +278,13 @@ router.put("/MiNegocio", async (req, res) => {
     ];
 
     const { rows } = await db.query(q, values);
+    console.log("[DEBUG] Filas actualizadas:", rows);
 
     if (!rows.length) return res.status(404).json({ message: "Negocio no encontrado" });
 
-    // Mismo mapeo que el GET
-    const mapToDto = (row) => ({
+    const row = rows[0];
+
+    const mapToDto = {
       IdNegocio: row.id_negocio,
       IdCategoria: row.id_categoria,
       IdMembresia: row.id_membresia,
@@ -283,16 +296,19 @@ router.put("/MiNegocio", async (req, res) => {
       TelefonoContacto: row.telefono_contacto,
       CorreoContacto: row.correo_contacto,
       HorarioAtencion: row.horario_atencion,
-      LinkUrl: row.linkurl
-    });
+      LinkUrl: row.linkUrl
+    };
 
-    return res.json({ message: "Actualizado correctamente", negocio: mapToDto(rows[0]) });
+    console.log("[DEBUG] DTO final actualizado:", mapToDto);
+
+    return res.json({ message: "Actualizado correctamente", negocio: mapToDto });
 
   } catch (e) {
     console.error("ERROR en PUT /MiNegocio:", e);
     return res.status(500).json({ message: "Error interno", detail: String(e) });
   }
 });
+
 
 
 module.exports = router;
