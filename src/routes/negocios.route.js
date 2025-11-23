@@ -2,7 +2,6 @@
 const { Router } = require("express");
 const db = require("../db");
 const { created, noContent } = require("../utils/respond");
-const authMiddleware = require("../middlewares/auth"); // 🔹 IMPORTAR EL MIDDLEWARE
 
 const router = Router();
 
@@ -60,7 +59,7 @@ router.get("/:id(\\d+)", async (req, res) => {
 });
 
 // POST create
-router.post("/", authMiddleware, async (req, res) => { // 🔹 proteger con auth
+router.post("/", async (req, res) => {
   try {
     const dto = req.body; 
     const ins = await db.query(
@@ -93,7 +92,7 @@ router.post("/", authMiddleware, async (req, res) => { // 🔹 proteger con auth
 });
 
 // PUT update
-router.put("/:id(\\d+)", authMiddleware, async (req, res) => { // 🔹 proteger con auth
+router.put("/:id(\\d+)", async (req, res) => {
   try {
     const id = Number(req.params.id);
     const dto = req.body;
@@ -125,7 +124,7 @@ router.put("/:id(\\d+)", authMiddleware, async (req, res) => { // 🔹 proteger 
 });
 
 // DELETE soft delete
-router.delete("/:id(\\d+)", authMiddleware, async (req, res) => { // 🔹 proteger con auth
+router.delete("/:id(\\d+)", async (req, res) => {
   try {
     const id = Number(req.params.id);
     await db.query(`UPDATE "Negocios" SET "estado"=FALSE WHERE "id_negocio"=$1;`, [id]);
@@ -136,7 +135,7 @@ router.delete("/:id(\\d+)", authMiddleware, async (req, res) => { // 🔹 proteg
 });
 
 // PATCH restore
-router.patch("/:id(\\d+)/restore", authMiddleware, async (req, res) => { // 🔹 proteger con auth
+router.patch("/:id(\\d+)/restore", async (req, res) => {
   try {
     const id = Number(req.params.id);
     await db.query(`UPDATE "Negocios" SET "estado"=TRUE WHERE "id_negocio"=$1;`, [id]);
@@ -152,7 +151,7 @@ router.patch("/:id(\\d+)/restore", authMiddleware, async (req, res) => { // 🔹
 // -----------------------------------------------------
 
 // PATCH aprobar negocio
-router.patch("/:id(\\d+)/approve", authMiddleware, async (req, res) => { // 🔹 proteger con auth
+router.patch("/:id(\\d+)/approve", async (req, res) => {
   try {
     const id = Number(req.params.id);
     await db.query(
@@ -166,7 +165,7 @@ router.patch("/:id(\\d+)/approve", authMiddleware, async (req, res) => { // 🔹
 });
 
 // PATCH rechazar negocio
-router.patch("/:id(\\d+)/reject", authMiddleware, async (req, res) => { // 🔹 proteger con auth
+router.patch("/:id(\\d+)/reject", async (req, res) => {
   try {
     const id = Number(req.params.id);
     await db.query(
@@ -180,7 +179,7 @@ router.patch("/:id(\\d+)/reject", authMiddleware, async (req, res) => { // 🔹 
 });
 
 // OBTENER EL NEGOCIO DEL USUARIO LOGUEADO
-router.get("/MiNegocio", authMiddleware, async (req, res) => { // 🔹 proteger con auth
+router.get("/MiNegocio", async (req, res) => {
   try {
     console.log("req.user:", req.user); // 🔹 depuración
     const auth = req.user;
@@ -208,7 +207,7 @@ router.get("/MiNegocio", authMiddleware, async (req, res) => { // 🔹 proteger 
   }
 });
 
-router.put("/MiNegocio", authMiddleware, async (req, res) => { // 🔹 proteger con auth
+router.put("/MiNegocio", async (req, res) => {
   try {
     const auth = req.user;
     if (!auth) return res.status(401).json({ message: "No autenticado" });
