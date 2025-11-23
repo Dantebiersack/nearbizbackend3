@@ -181,46 +181,44 @@ router.patch("/:id(\\d+)/reject", async (req, res) => {
   }
 });
 
-// --- GET MiNegocio (usuario logueado) con debug
+// --- GET MiNegocio seguro
 router.get("/MiNegocio", async (req, res) => {
   try {
     const auth = getUserFromAuthHeader(req);
     if (!auth) return res.status(401).json({ message: "No autenticado" });
-    if (auth.rol !== "adminNegocio") return res.status(403).json({ message: "Acceso denegado" });
+    if (!auth.rol.includes("adminNegocio")) return res.status(403).json({ message: "Acceso denegado" });
 
     console.log("[DEBUG] Usuario logueado:", auth);
 
-    const COLS = `
-      id_negocio, id_categoria, id_membresia, nombre, direccion,
-      coordenadas_lat, coordenadas_lng, descripcion,
-      telefono_contacto, correo_contacto, horario_atencion, "linkUrl"
+    const q = `
+      SELECT 
+        id_negocio, id_categoria, id_membresia, nombre, direccion,
+        coordenadas_lat, coordenadas_lng, descripcion,
+        telefono_contacto, correo_contacto, horario_atencion, linkUrl
+      FROM "Negocios"
+      WHERE "id_usuario" = $1
+      LIMIT 1;
     `;
-
-    const q = `SELECT ${COLS} FROM "Negocios" WHERE "id_usuario"=$1 LIMIT 1;`;
     const { rows } = await db.query(q, [auth.idUsuario]);
+    console.log("[DEBUG] Filas obtenidas:", rows);
 
-    console.log("[DEBUG] Filas obtenidas de la DB:", rows);
-
-    if (!rows.length) return res.json(null);
+    if (!rows.length) return res.json(null); // No hay negocio, devuelve null
 
     const row = rows[0];
 
-    // Checamos si todas las columnas existen
-    console.log("[DEBUG] Row individual:", row);
-
     const mapToDto = {
-      IdNegocio: row.id_negocio,
-      IdCategoria: row.id_categoria,
-      IdMembresia: row.id_membresia,
-      Nombre: row.nombre,
-      Direccion: row.direccion,
-      CoordenadasLat: row.coordenadas_lat,
-      CoordenadasLng: row.coordenadas_lng,
-      Descripcion: row.descripcion,
-      TelefonoContacto: row.telefono_contacto,
-      CorreoContacto: row.correo_contacto,
-      HorarioAtencion: row.horario_atencion,
-      LinkUrl: row.linkUrl // Ojo: usar mayúscula exacta
+      IdNegocio: row.id_negocio || 0,
+      IdCategoria: row.id_categoria || "",
+      IdMembresia: row.id_membresia || null,
+      Nombre: row.nombre || "",
+      Direccion: row.direccion || "",
+      CoordenadasLat: row.coordenadas_lat || "",
+      CoordenadasLng: row.coordenadas_lng || "",
+      Descripcion: row.descripcion || "",
+      TelefonoContacto: row.telefono_contacto || "",
+      CorreoContacto: row.correo_contacto || "",
+      HorarioAtencion: row.horario_atencion || "[]",
+      LinkUrl: row.linkUrl || ""
     };
 
     console.log("[DEBUG] DTO final:", mapToDto);
