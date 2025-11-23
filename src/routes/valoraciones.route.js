@@ -2,69 +2,62 @@
 const { Router } = require("express");
 const db = require("../db");
 const { created, noContent } = require("../utils/respond");
-const { decodeJwt } = require("jose"); // necesario para leer el token
+const { decodeJwt } = require("../utils/jwt");
 
 const router = Router();
 
 /* ============================================================
-   Helper: leer usuario desde el token
+   Helper: obtener usuario desde el token
    ============================================================ */
 function getUserFromAuthHeader(req) {
   const auth = req.headers.authorization || "";
-
   const parts = auth.split(" ");
-  if (parts.length !== 2 || parts[0] !== "Bearer") {
-    return null;
-  }
+
+  if (parts.length !== 2 || parts[0] !== "Bearer") return null;
 
   const token = parts[1];
   const decoded = decodeJwt(token);
 
-  if (!decoded || !decoded.sub || !decoded.rol) return null;
+  if (!decoded || !decoded.payload) return null;
 
-  return {
-    idUsuario: Number(decoded.sub),
-    rol: decoded.rol
-  };
+  const payload = decoded.payload;
+  const idUsuario = Number(payload.sub);
+  const rol = payload.rol;
+
+  if (!idUsuario) return null;
+
+  return { idUsuario, rol };
 }
 
 /* ============================================================
-   GET valoraciones del negocio del usuario (/api/Valoraciones/MisValoraciones)
+   Helper: obtener ID de negocio del admin/personales
+   ============================================================ */
+async function getMyBusinessId(idUsuario) {
+  const res = await db.query(
+    `SELECT "id_negocio" 
+     FROM "Personal"
+     WHERE "id_usuario"=$1
+     LIMIT 1`,
+    [idUsuario]
+  );
+  return res.rows.length ? res.rows[0].id_negocio : null;
+}
+
+/* ============================================================
+   GET → Obtener valoraciones del negocio del usuario logueado
    ============================================================ */
 router.get("/MisValoraciones", async (req, res) => {
   try {
     const auth = getUserFromAuthHeader(req);
+    if (!auth) return res.status(401).json({ message: "Token inválido" });
 
-    if (!auth) {
-      return res.status(401).json({ message: "Token inválido o ausente" });
+    if (auth.rol !== "adminNegocio" && auth.rol !== "personal") {
+      return res.status(403).json({ message: "No autorizado" });
     }
 
-    const { idUsuario, rol } = auth;
+    const idNegocio = await getMyBusinessId(auth.idUsuario);
+    if (!idNegocio) return res.json([]);
 
-    // Solo adminNegocio puede ver estas valoraciones
-    if (rol !== "adminNegocio") {
-      return res.status(403).json({ message: "No tienes permiso" });
-    }
-
-    // 1️⃣ Buscar el negocio asociado al usuario
-    const qNegocio = `
-      SELECT id_negocio
-      FROM "Personal"
-      WHERE id_usuario = $1
-      LIMIT 1;
-    `;
-
-    const negocioResult = await db.query(qNegocio, [idUsuario]);
-
-    if (negocioResult.rowCount === 0) {
-      return res.status(404).json({
-        message: "Este usuario no pertenece a ningún negocio"
-      });
-    }
-
-    const idNegocio = negocioResult.rows[0].id_negocio;
-
-    // 2️⃣ Traer las valoraciones de ese negocio
     const q = `
       SELECT 
         v.id_valoracion,
@@ -97,12 +90,12 @@ router.get("/MisValoraciones", async (req, res) => {
 
   } catch (e) {
     console.error("Error en MisValoraciones:", e);
-    return res.status(500).json({ message: "Error", detail: String(e) });
+    return res.status(500).json({ message: "Error interno", detail: String(e) });
   }
 });
 
 /* ============================================================
-   GET valoraciones por negocio (NO MODIFICADO)
+   GET Valoraciones por negocio
    ============================================================ */
 router.get("/Negocio/:idNegocio(\\d+)", async (req, res) => {
   try {
@@ -123,7 +116,6 @@ router.get("/Negocio/:idNegocio(\\d+)", async (req, res) => {
       WHERE v.id_negocio = $1
       ORDER BY v.fecha DESC;
     `;
-
     const { rows } = await db.query(q, [idNegocio]);
 
     const data = rows.map(r => ({
@@ -143,7 +135,7 @@ router.get("/Negocio/:idNegocio(\\d+)", async (req, res) => {
 });
 
 /* ============================================================
-   GET todas las valoraciones (NO MODIFICADO)
+   GET todas las valoraciones
    ============================================================ */
 router.get("/", async (_req, res) => {
   try {
@@ -161,7 +153,6 @@ router.get("/", async (_req, res) => {
       LEFT JOIN "Usuarios" u ON u.id_usuario = c.id_usuario
       ORDER BY v.fecha DESC;
     `;
-
     const { rows } = await db.query(q);
 
     const data = rows.map(r => ({
@@ -181,23 +172,28 @@ router.get("/", async (_req, res) => {
 });
 
 /* ============================================================
-   POST crear valoración (NO MODIFICADO)
+   POST crear nueva valoración — ARREGLADO CON id_cita
    ============================================================ */
 router.post("/", async (req, res) => {
   try {
-    const dto = req.body; // { IdNegocio, IdCliente, Comentario, Calificacion }
+    const dto = req.body;
 
     const ins = await db.query(
       `INSERT INTO "Valoraciones"
-       ("id_negocio","id_cliente","comentario","calificacion","fecha")
-       VALUES($1,$2,$3,$4, NOW())
-       RETURNING id_valoracion, id_negocio, id_cliente, comentario, calificacion, fecha;`,
-      [dto.IdNegocio, dto.IdCliente, dto.Comentario || null, dto.Calificacion || null]
+       ("id_negocio","id_cliente","comentario","calificacion","id_cita","fecha")
+       VALUES($1,$2,$3,$4,$5, NOW())
+       RETURNING id_valoracion, id_negocio, id_cliente, comentario, calificacion, id_cita, fecha;`,
+      [
+        dto.IdNegocio,
+        dto.IdCliente,
+        dto.Comentario || null,
+        dto.Calificacion || null,
+        dto.id_cita // 👈 ESTA ES LA CLAVE
+      ]
     );
 
     const r = ins.rows[0];
 
-    // Obtener el nombre del cliente
     const { rows: userRows } = await db.query(
       `SELECT u.nombre
        FROM "Clientes" c
@@ -215,6 +211,7 @@ router.post("/", async (req, res) => {
       IdCliente: r.id_cliente,
       Comentario: r.comentario,
       Calificacion: r.calificacion,
+      id_cita: r.id_cita,
       Fecha: r.fecha,
       NombreCliente
     };
@@ -226,7 +223,7 @@ router.post("/", async (req, res) => {
 });
 
 /* ============================================================
-   POST responder valoración (NO MODIFICADO)
+   POST responder valoración
    ============================================================ */
 router.post("/:idValoracion(\\d+)/respuesta", async (req, res) => {
   try {

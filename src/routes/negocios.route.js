@@ -179,4 +179,81 @@ router.patch("/:id(\\d+)/reject", async (req, res) => {
   }
 });
 
+
+
+
+// OBTENER EL NEGOCIO DEL USUARIO LOGUEADO
+router.get("/MiNegocio", async (req, res) => {
+  try {
+    const auth = req.user; // viene del token: IdUsuario, Rol, etc.
+
+    // 1. Validar que sea negocio
+    if (auth.rol !== "adminNegocio") {
+      return res.status(403).json({ message: "Acceso denegado" });
+    }
+
+    // 2. Buscar el negocio asociado al usuario logueado
+    const q = `
+      SELECT ${COLS}
+      FROM "Negocios"
+      WHERE "id_usuario" = $1
+      LIMIT 1;
+    `;
+
+    const { rows } = await db.query(q, [auth.idUsuario]);
+
+    if (!rows.length) {
+      return res.json(null); // no tiene negocio todavía
+    }
+
+    return res.json(mapToDto(rows[0]));
+
+  } catch (e) {
+    return res.status(500).json({ message: "Error", detail: String(e) });
+  }
+});
+
+
+router.put("/MiNegocio", async (req, res) => {
+  try {
+    const auth = req.user;
+
+    if (auth.rol !== "adminNegocio") {
+      return res.status(403).json({ message: "Acceso denegado" });
+    }
+
+    const dto = req.body;
+
+    const q = `
+      UPDATE "Negocios" SET 
+        "id_categoria"=$1, "id_membresia"=$2, "nombre"=$3, "direccion"=$4,
+        "coordenadas_lat"=$5, "coordenadas_lng"=$6, "descripcion"=$7,
+        "telefono_contacto"=$8, "correo_contacto"=$9, "horario_atencion"=$10,
+        "linkUrl"=$11
+      WHERE "id_usuario"=$12;
+    `;
+
+    await db.query(q, [
+      dto.IdCategoria,
+      dto.IdMembresia || null,
+      dto.Nombre,
+      dto.Direccion || null,
+      dto.CoordenadasLat || null,
+      dto.CoordenadasLng || null,
+      dto.Descripcion || null,
+      dto.TelefonoContacto || null,
+      dto.CorreoContacto || null,
+      dto.HorarioAtencion || null,
+      dto.LinkUrl || null,
+      auth.idUsuario
+    ]);
+
+    return res.json({ message: "Actualizado correctamente" });
+
+  } catch (e) {
+    return res.status(500).json({ message: "Error", detail: String(e) });
+  }
+});
+
+
 module.exports = router;
