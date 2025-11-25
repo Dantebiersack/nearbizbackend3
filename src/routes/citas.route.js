@@ -1,19 +1,18 @@
-// src/routes/citas.route.js
+// src/routes/servicios.route.js
 const { Router } = require("express");
 const db = require("../db");
-const router = Router();
 const { decodeJwt } = require("../utils/jwt");
+const router = Router();
 
-const mapCita = (c) => ({
-  IdCita: c.id_cita,
-  IdCliente: c.id_cliente,
-  IdTecnico: c.id_tecnico,
-  IdServicio: c.id_servicio,
-  FechaCita: c.fecha_cita,     // DATE
-  HoraInicio: c.hora_inicio,   // TIME
-  HoraFin: c.hora_fin,         // TIME
-  Estado: c.estado,            // 'pendiente' | 'confirmada' | 'cancelada' ...
-  MotivoCancelacion: c.motivo_cancelacion,
+
+const mapServicio = (s) => ({
+  IdServicio: s.id_servicio,
+  IdNegocio: s.id_negocio,
+  NombreServicio: s.nombre_servicio,
+  Descripcion: s.descripcion,
+  Precio: Number(s.precio),
+  DuracionMinutos: s.duracion_minutos,
+  Estado: s.estado,
 });
 
 function getUserFromAuthHeader(req) {
@@ -51,366 +50,444 @@ function getUserFromAuthHeader(req) {
   return { idUsuario, rol };
 }
 
-function mapCitaRow(row) {
-  return {
-    idCita: row.id_cita,
-    idCliente: row.id_cliente,
-    idTecnico: row.id_tecnico,
-    idServicio: row.id_servicio,
-    fechaCita: row.fecha_cita,
-    horaInicio: row.hora_inicio,
-    horaFin: row.hora_fin,
-    estado: row.estado,
-    motivoCancelacion: row.motivo_cancelacion,
-    negocioId: row.id_negocio,
-    negocioNombre: row.negocio_nombre,
-    clienteNombre: row.cliente_nombre,
-    tecnicoNombre: row.tecnico_nombre,
-    servicioNombre: row.servicio_nombre,
-  };
+function requireUser(req, res) {
+  const user = getUserFromAuthHeader(req);
+  if (!user) {
+    res.status(401).json({ message: "Token inválido o ausente" });
+    return null;
+  }
+  return user;
 }
 
-router.get("/by-role", async function (req, res) {
-  try {
-    const auth = getUserFromAuthHeader(req);
+function isSuperAdmin(rol) {
+  return rol === "adminNearbiz" || rol === "superadmin";
+}
 
-    if (!auth) {
-      return res.status(401).json({
-        message: "Token ausente o inválido en Authorization",
-      });
-    }
+function isAdminNegocio(rol) {
+  return rol === "adminNegocio" || isSuperAdmin(rol);
+}
 
-    const rol = auth.rol;         // "adminNearbiz" | "adminNegocio" | "personal"
-    const idUsuario = auth.idUsuario;
+/**
+ * Devuelve los id_negocio a los que pertenece un usuario (tabla Personal)
+ * Solo negocios activos y personal activo.
+ */
+async function getNegociosIdsByUser(idUsuario) {
+  const { rows } = await db.query(
+    `
+    SELECT DISTINCT p."id_negocio"
+    FROM "Personal" p
+    JOIN "Negocios" n ON n."id_negocio" = p."id_negocio"
+    WHERE p."id_usuario" = $1
+  `,
+    [idUsuario]
+  );
+  return rows.map((r) => r.id_negocio);
+}
 
-    console.log("Usuario desde JWT >>>", { idUsuario, rol });
+/**
+ * Verifica si el usuario puede operar sobre un negocio concreto.
+ */
+async function assertUserCanAccessNegocio(idUsuario, rol, idNegocio) {
+  if (isSuperAdmin(rol)) return true;
+  const negocios = await getNegociosIdsByUser(idUsuario);
+  return negocios.includes(Number(idNegocio));
+}
 
-    var where = "";
-    var params = [];
-
-    if (rol === "adminNearbiz") {
-      where = "";
-      params = [];
-    } else if (rol === "adminNegocio") {
-      // Ajusta esta parte a tu modelo real.
-      where = 'WHERE neg."id_usuario_admin" = $1';
-      params = [idUsuario];
-    } else if (rol === "personal") {
-      where = 'WHERE tec."id_usuario" = $1';
-      params = [idUsuario];
-    } else {
-      return res
-        .status(403)
-        .json({ message: "Rol sin permiso para consultar citas" });
-    }
-
-    const sql =
-      'SELECT ' +
-      '  ci."id_cita",' +
-      '  ci."id_cliente",' +
-      '  ci."id_tecnico",' +
-      '  ci."id_servicio",' +
-      '  ci."fecha_cita",' +
-      '  ci."hora_inicio",' +
-      '  ci."hora_fin",' +
-      '  ci."estado",' +
-      '  ci."motivo_cancelacion",' +
-      '  neg."id_negocio",' +
-      '  neg."nombre"            AS negocio_nombre,' +
-      '  u_cli."nombre"          AS cliente_nombre,' +
-      '  u_tec."nombre"          AS tecnico_nombre,' +
-      '  s."nombre_servicio"     AS servicio_nombre ' +
-      'FROM "Citas" ci ' +
-      'JOIN "Servicios" s   ON s."id_servicio"   = ci."id_servicio" ' +
-      'JOIN "Personal" tec  ON tec."id_personal" = ci."id_tecnico" ' +
-      'JOIN "Negocios" neg  ON neg."id_negocio"  = tec."id_negocio" ' +
-      'JOIN "Clientes" cli  ON cli."id_cliente"  = ci."id_cliente" ' +
-      'JOIN "Usuarios" u_cli ON u_cli."id_usuario" = cli."id_usuario" ' +
-      'JOIN "Usuarios" u_tec ON u_tec."id_usuario" = tec."id_usuario" ' +
-      (where || "") +
-      ' ORDER BY ci."fecha_cita", ci."hora_inicio"';
-
-    const result = await db.query(sql, params);
-    const rows = result.rows || [];
-
-    return res.json(rows.map(mapCita));
-  } catch (e) {
-    console.error("Error en GET /Citas/by-role:", e);
-    return res.status(500).json({ message: "Error", detail: String(e) });
-  }
-});
+// ---------- GET /servicios ----------
+// Lista servicios:
+// - SuperAdmin: puede ver todos o filtrar por ?idNegocio
+// - AdminNegocio/Personal: se filtra automáticamente por los negocios de la tabla Personal
 router.get("/", async (req, res) => {
   try {
-    const includeInactive = String(req.query.includeInactive || "false") === "true";
-    const idCliente = req.query.idCliente ? Number(req.query.idCliente) : null;
-    const idTecnico = req.query.idTecnico ? Number(req.query.idTecnico) : null;
+    const user = requireUser(req, res);
+    if (!user) return;
+    const { idUsuario, rol } = user;
+
+    const includeInactive =
+      String(req.query.includeInactive || "false") === "true";
 
     const cond = [];
-    if (!includeInactive) cond.push(`"estado" <> 'cancelada'`);
-    if (idCliente) cond.push(`"id_cliente" = ${idCliente}`);
-    if (idTecnico) cond.push(`"id_tecnico" = ${idTecnico}`);
+    const params = [];
+
+    if (!includeInactive) {
+      params.push(true);
+      cond.push(`s."estado" = $${params.length}`);
+    }
+
+    if (isSuperAdmin(rol)) {
+      // puede opcionalmente filtrar por negocio
+      const idNegocio = req.query.idNegocio
+        ? Number(req.query.idNegocio)
+        : null;
+      if (idNegocio) {
+        params.push(idNegocio);
+        cond.push(`s."id_negocio" = $${params.length}`);
+      }
+      // sin idNegocio → ve todos
+    } else {
+      // usuario normal / admin de negocio: solo sus negocios
+      const negocios = await getNegociosIdsByUser(idUsuario);
+      if (!negocios.length) {
+        return res.status(403).json({
+          message:
+            "No tienes negocios asociados para listar servicios",
+        });
+      }
+      params.push(negocios);
+      cond.push(`s."id_negocio" = ANY($${params.length})`);
+    }
+
     const where = cond.length ? `WHERE ${cond.join(" AND ")}` : "";
 
-    const { rows } = await db.query(
-      `SELECT * FROM "Citas" ${where} ORDER BY "fecha_cita","hora_inicio"`
-    );
-    res.json(rows.map(mapCita));
-  } catch (e) { res.status(500).json({ message: "Error", detail: String(e) }); }
+    const sql = `
+      SELECT s.*
+      FROM "Servicios" s
+      ${where}
+      ORDER BY s."id_servicio"
+    `;
+
+    const { rows } = await db.query(sql, params);
+    res.json(rows.map(mapServicio));
+  } catch (e) {
+    console.error("Error GET /servicios:", e);
+    res.status(500).json({ message: "Error", detail: String(e) });
+  }
 });
 
-
-
+// ---------- GET /servicios/:id ----------
 router.get("/:id", async (req, res) => {
   try {
+    const user = requireUser(req, res);
+    if (!user) return;
+    const { idUsuario, rol } = user;
+
     const { rows } = await db.query(
-      `SELECT * FROM "Citas" WHERE "id_cita"=$1 LIMIT 1`,
+      `SELECT * FROM "Servicios" WHERE "id_servicio" = $1 LIMIT 1`,
       [req.params.id]
     );
     if (!rows.length) return res.status(404).end();
-    res.json(mapCita(rows[0]));
-  } catch (e) { res.status(500).json({ message: "Error", detail: String(e) }); }
+
+    const srv = rows[0];
+
+    // Solo puedes ver el servicio si pertenece a uno de tus negocios (o eres superadmin)
+    const canAccess = await assertUserCanAccessNegocio(
+      idUsuario,
+      rol,
+      srv.id_negocio
+    );
+    if (!canAccess) {
+      return res
+        .status(403)
+        .json({ message: "No tienes acceso a este servicio" });
+    }
+
+    res.json(mapServicio(srv));
+  } catch (e) {
+    console.error("Error GET /servicios/:id:", e);
+    res.status(500).json({ message: "Error", detail: String(e) });
+  }
 });
 
-// NUEVA (USAR ESTA - corregida)
+// ---------- POST /servicios ----------
+// ---------- POST /servicios ----------
 router.post("/", async (req, res) => {
   try {
-    const {
-      idCliente, idTecnico, idServicio,
-      fechaCita, horaInicio, horaFin, estado, motivoCancelacion
-    } = req.body;
+    const user = requireUser(req, res);
+    if (!user) return;
+    const { idUsuario, rol } = user;
 
-    //  VALIDACIÓN EN BACKEND
-    const solapamientoQuery = await db.query(
-      `SELECT id_cita FROM "Citas" 
-       WHERE id_tecnico = $1 
-       AND fecha_cita = $2 
-       AND estado NOT IN ('cancelada', 'rechazada')
-       AND (hora_inicio, hora_fin) OVERLAPS ($3::time, $4::time)`,
-      [idTecnico, fechaCita, horaInicio, horaFin]
-    );
-
-    if (solapamientoQuery.rows.length > 0) {
-      return res.status(409).json({ 
-        message: "El técnico ya tiene una cita programada en este horario",
-        detail: "Por favor, elige otro horario o técnico"
-      });
+    if (!isAdminNegocio(rol)) {
+      return res
+        .status(403)
+        .json({ message: "No tienes permisos para crear servicios" });
     }
 
-    // INSERTAR CORRECTAMENTE
-    const { rows } = await db.query(
-      `INSERT INTO "Citas"
-       ("id_cliente", "id_tecnico", "id_servicio", "fecha_cita", "hora_inicio", "hora_fin", "estado", "motivo_cancelacion")
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       RETURNING *`,
-      [
-        idCliente, idTecnico, idServicio,
-        fechaCita, horaInicio, horaFin, 
-        estado || "pendiente", 
-        motivoCancelacion || null
-      ]
-    );
-    
-    res.status(201).json(mapCita(rows[0]));
-    
-  } catch (e) { 
-    console.error('Error en POST /citas:', e);
-    res.status(500).json({ message: "Error", detail: String(e) }); 
-  }
-});
+    let { idNegocio, nombreServicio, descripcion, precio, duracionMinutos } =
+      req.body;
 
-router.put("/:id", async (req, res) => {
-  try {
-    const {
-      idCliente, idTecnico, idServicio,
-      fechaCita, horaInicio, horaFin, estado, motivoCancelacion
-    } = req.body;
-
-    const { rowCount } = await db.query(
-      `UPDATE "Citas"
-       SET "id_cliente"=$1,"id_tecnico"=$2,"id_servicio"=$3,
-           "fecha_cita"=$4,"hora_inicio"=$5,"hora_fin"=$6,
-           "estado"=$7,"motivo_cancelacion"=$8
-       WHERE "id_cita"=$9`,
-      [
-        idCliente, idTecnico, idServicio,
-        fechaCita, horaInicio, horaFin, estado, motivoCancelacion || null,
-        req.params.id
-      ]
-    );
-    if (!rowCount) return res.status(404).end();
-    res.status(204).end();
-  } catch (e) { res.status(500).json({ message: "Error", detail: String(e) }); }
-});
-
-/** Cancelación “soft”: dejamos todo igual pero estado='cancelada' y guardamos motivo */
-router.patch("/:id/cancel", async (req, res) => {
-  try {
-    const { motivo } = req.body;
-    const { rowCount } = await db.query(
-      `UPDATE "Citas" SET "estado"='cancelada',"motivo_cancelacion"=$1 WHERE "id_cita"=$2`,
-      [motivo || null, req.params.id]
-    );
-    if (!rowCount) return res.status(404).end();
-    res.status(204).end();
-  } catch (e) { res.status(500).json({ message: "Error", detail: String(e) }); }
-});
-
-router.patch("/:id/approve", /*authRequired,*/ async function (req, res) {
-  try {
-    var id = Number(req.params.id);
-    if (!id || !Number.isInteger(id)) {
-      return res.status(400).json({ message: "Id de cita inválido" });
+    // 🔹 Normalizamos/convertimos números
+    if (idNegocio != null) {
+      idNegocio = Number(idNegocio);
+      if (!idNegocio || Number.isNaN(idNegocio)) idNegocio = null;
     }
+    precio = Number(precio);
+    duracionMinutos = Number(duracionMinutos);
 
-    // Opcional: podrías validar aquí que el estado actual no sea "cancelada"
-    // con un SELECT previo, pero para mantenerlo simple hacemos solo UPDATE.
+    // 🔹 Resolver idNegocio según el rol
+    let idNegocioFinal = null;
 
-    var upd = await db.query(
-      'UPDATE "Citas" ' +
-        'SET "estado" = $2, ' +
-        '    "motivo_cancelacion" = NULL, ' +
-        '    "fecha_actualizacion" = NOW() ' +
-        'WHERE "id_cita" = $1 ' +
-        'RETURNING ' +
-        '  "id_cita",' +
-        '  "id_cliente",' +
-        '  "id_tecnico",' +
-        '  "id_servicio",' +
-        '  "fecha_cita",' +
-        '  "hora_inicio",' +
-        '  "hora_fin",' +
-        '  "estado",' +
-        '  "motivo_cancelacion";',
-      [id, "atendida"]
-    );
-
-    if (upd.rowCount === 0) {
-      return res.status(404).json({ message: "Cita no encontrada" });
-    }
-
-    var row = upd.rows[0];
-
-    return res.json({
-      idCita: row.id_cita,
-      idCliente: row.id_cliente,
-      idTecnico: row.id_tecnico,
-      idServicio: row.id_servicio,
-      fechaCita: row.fecha_cita,
-      horaInicio: row.hora_inicio,
-      horaFin: row.hora_fin,
-      estado: row.estado,
-      motivoCancelacion: row.motivo_cancelacion,
-    });
-  } catch (e) {
-    console.error("Error en PATCH /Citas/:id/approve:", e);
-    return res.status(500).json({ message: "Error", detail: String(e) });
-  }
-});
-
-////
-// Confirmar o rechazar cita, y enviar notificación Expo
-// Confirmar o rechazar cita, y enviar notificación Expo
-router.patch("/:id/estatus", async (req, res) => {
-  try {
-    const id = Number(req.params.id);
-    const { estatus, motivo } = req.body;
-
-    if (!["confirmada", "rechazada"].includes(estatus)) {
-      return res.status(400).json({
-        message: "Estatus no válido. Usa 'confirmada' o 'rechazada'."
-      });
-    }
-
-    // 1. Obtener datos de la cita
-    const citaQuery = await db.query(
-      `SELECT "id_cliente","id_tecnico","id_servicio","fecha_cita","hora_inicio","hora_fin","estado"
-       FROM "Citas"
-       WHERE "id_cita"=$1`,
-      [id]
-    );
-
-    if (!citaQuery.rows.length) {
-      return res.status(404).json({ message: "Cita no encontrada" });
-    }
-
-    const cita = citaQuery.rows[0];
-
-    // 2. Actualizar cita en BD
-    await db.query(
-      `UPDATE "Citas"
-       SET "estado"=$1,
-           "motivo_cancelacion"=$2
-       WHERE "id_cita"=$3`,
-      [
-        estatus,
-        estatus === "rechazada" ? motivo || "Sin motivo" : null,
-        id
-      ]
-    );
-
-    // 3. Obtener id_usuario y token del cliente (SIMPLIFICADO)
-    const clienteQuery = await db.query(
-      `SELECT cli."id_cliente", cli."id_usuario", u."token"
-       FROM "Clientes" cli
-       JOIN "Usuarios" u ON u."id_usuario" = cli."id_usuario"
-       WHERE cli."id_cliente"=$1`,
-      [cita.id_cliente]
-    );
-
-    if (!clienteQuery.rows.length) {
-      return res.status(404).json({ message: "Usuario cliente no encontrado" });
-    }
-
-    const cliente = clienteQuery.rows[0];
-    const pushToken = cliente.token;
-    const idUsuario = cliente.id_usuario;
-
-    // 4. Enviar notificación Expo usando el id_usuario como referencia
-    if (pushToken) {
-      try {
-        const tituloNotificacion = estatus === "confirmada" 
-          ? "¡Cita Confirmada! " 
-          : "Cita Rechazada ";
-        
-        const mensajeNotificacion = estatus === "confirmada"
-          ? "Tu cita ha sido confirmada. ¡Prepárate para tu servicio!"
-          : `Motivo: ${motivo || "No especificado"}`;
-
-        await fetch("https://exp.host/--/api/v2/push/send", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            to: pushToken,
-            title: tituloNotificacion,
-            body: mensajeNotificacion,
-            sound: "default",
-            data: { 
-              idCita: id, 
-              idUsuario: idUsuario, // Ahora incluimos el id_usuario
-              estatus: estatus,
-              tipo: 'cita_estatus'
-            }
-          })
+    if (isSuperAdmin(rol)) {
+      // Superadmin DEBE indicar el negocio
+      if (!idNegocio) {
+        return res.status(400).json({
+          message: "idNegocio es obligatorio para crear servicios (superadmin)",
         });
-        
-        console.log(`📱 Notificación enviada a usuario ${idUsuario}`);
-        
-      } catch (notiError) {
-        console.error(" Error enviando notificación Expo:", notiError);
+      }
+      idNegocioFinal = idNegocio;
+    } else {
+      // Admin de negocio: lo sacamos de la tabla Personal
+      const negocios = await getNegociosIdsByUser(idUsuario); // [1,2,...]
+      if (!negocios.length) {
+        return res.status(403).json({
+          message:
+            "No tienes negocios asociados; no puedes crear servicios",
+        });
+      }
+
+      if (negocios.length === 1 && !idNegocio) {
+        // Caso típico: solo pertenece a un negocio
+        idNegocioFinal = negocios[0];
+      } else if (idNegocio && negocios.includes(idNegocio)) {
+        // Si por alguna razón mandan idNegocio, lo validamos contra sus negocios
+        idNegocioFinal = idNegocio;
+      } else if (negocios.length > 1 && !idNegocio) {
+        // Tiene varios negocios y no especificó
+        return res.status(400).json({
+          message:
+            "Tienes más de un negocio asociado, especifica idNegocio en el body",
+          negociosDisponibles: negocios,
+        });
+      } else {
+        return res.status(403).json({
+          message: "No puedes crear servicios para este negocio",
+        });
       }
     }
 
-    return res.json({
-      message: `Cita ${estatus}`,
-      idCita: id,
-      idUsuario: idUsuario, // Devolvemos el id_usuario en la respuesta
-      notificado: !!pushToken
-    });
+    if (!nombreServicio || !precio || !duracionMinutos) {
+      return res.status(400).json({
+        message:
+          "Faltan datos obligatorios: nombreServicio, precio, duracionMinutos",
+      });
+    }
+
+    const { rows } = await db.query(
+      `INSERT INTO "Servicios"
+       ("id_negocio","nombre_servicio","descripcion","precio","duracion_minutos","estado")
+       VALUES ($1,$2,$3,$4,$5,TRUE)
+       RETURNING *`,
+      [idNegocioFinal, nombreServicio, descripcion || null, precio, duracionMinutos]
+    );
+
+    res.status(201).json(mapServicio(rows[0]));
   } catch (e) {
-    console.error("Error en PATCH /citas/:id/estatus:", e);
-    return res.status(500).json({ message: "Error", detail: String(e) });
+    console.error("Error POST /servicios:", e);
+    res.status(500).json({ message: "Error", detail: String(e) });
+  }
+});
+
+// ---------- PUT /servicios/:id ----------
+router.put("/:id", async (req, res) => {
+  try {
+    const user = requireUser(req, res);
+    if (!user) return;
+    const { idUsuario, rol } = user;
+
+    if (!isAdminNegocio(rol)) {
+      return res
+        .status(403)
+        .json({ message: "No tienes permisos para actualizar servicios" });
+    }
+
+    // primero obtengo el servicio para ver a qué negocio pertenece
+    const { rows } = await db.query(
+      `SELECT * FROM "Servicios" WHERE "id_servicio" = $1`,
+      [req.params.id]
+    );
+    if (!rows.length) return res.status(404).end();
+    const srv = rows[0];
+
+    const canAccess = await assertUserCanAccessNegocio(
+      idUsuario,
+      rol,
+      srv.id_negocio
+    );
+    if (!canAccess) {
+      return res
+        .status(403)
+        .json({ message: "No puedes editar servicios de este negocio" });
+    }
+
+    const { nombreServicio, descripcion, precio, duracionMinutos } = req.body;
+
+    const { rowCount } = await db.query(
+      `UPDATE "Servicios"
+       SET "nombre_servicio"  = $1,
+           "descripcion"      = $2,
+           "precio"           = $3,
+           "duracion_minutos" = $4
+       WHERE "id_servicio" = $5`,
+      [
+        nombreServicio,
+        descripcion || null,
+        precio,
+        duracionMinutos,
+        req.params.id,
+      ]
+    );
+    if (!rowCount) return res.status(404).end();
+    res.status(204).end();
+  } catch (e) {
+    console.error("Error PUT /servicios/:id:", e);
+    res.status(500).json({ message: "Error", detail: String(e) });
+  }
+});
+
+// ---------- DELETE /servicios/:id ----------
+// Baja lógica
+router.delete("/:id", async (req, res) => {
+  try {
+    const user = requireUser(req, res);
+    if (!user) return;
+    const { idUsuario, rol } = user;
+
+    if (!isAdminNegocio(rol)) {
+      return res
+        .status(403)
+        .json({ message: "No tienes permisos para eliminar servicios" });
+    }
+
+    const { rows } = await db.query(
+      `SELECT * FROM "Servicios" WHERE "id_servicio" = $1`,
+      [req.params.id]
+    );
+    if (!rows.length) return res.status(404).end();
+    const srv = rows[0];
+
+    const canAccess = await assertUserCanAccessNegocio(
+      idUsuario,
+      rol,
+      srv.id_negocio
+    );
+    if (!canAccess) {
+      return res
+        .status(403)
+        .json({ message: "No puedes eliminar servicios de este negocio" });
+    }
+
+    const { rowCount } = await db.query(
+      `UPDATE "Servicios"
+       SET "estado" = FALSE
+       WHERE "id_servicio" = $1`,
+      [req.params.id]
+    );
+    if (!rowCount) return res.status(404).end();
+    res.status(204).end();
+  } catch (e) {
+    console.error("Error DELETE /servicios/:id:", e);
+    res.status(500).json({ message: "Error", detail: String(e) });
+  }
+});
+
+// ---------- PATCH /servicios/:id/restore ----------
+// Reactiva un servicio
+router.patch("/:id/restore", async (req, res) => {
+  try {
+    const user = requireUser(req, res);
+    if (!user) return;
+    const { idUsuario, rol } = user;
+
+    if (!isAdminNegocio(rol)) {
+      return res
+        .status(403)
+        .json({ message: "No tienes permisos para restaurar servicios" });
+    }
+
+    const { rows } = await db.query(
+      `SELECT * FROM "Servicios" WHERE "id_servicio" = $1`,
+      [req.params.id]
+    );
+    if (!rows.length) return res.status(404).end();
+    const srv = rows[0];
+
+    const canAccess = await assertUserCanAccessNegocio(
+      idUsuario,
+      rol,
+      srv.id_negocio
+    );
+    if (!canAccess) {
+      return res
+        .status(403)
+        .json({ message: "No puedes restaurar servicios de este negocio" });
+    }
+
+    const { rowCount } = await db.query(
+      `UPDATE "Servicios"
+       SET "estado" = TRUE
+       WHERE "id_servicio" = $1`,
+      [req.params.id]
+    );
+    if (!rowCount) return res.status(404).end();
+    res.status(204).end();
+  } catch (e) {
+    console.error("Error PATCH /servicios/:id/restore:", e);
+    res.status(500).json({ message: "Error", detail: String(e) });
+  }
+});
+
+
+//Apis sin token 
+// ---------- GET /servicios/public/all ----------
+// Lista TODOS los servicios ACTIVOS (público - sin auth)
+router.get("/public/all", async (req, res) => {
+  try {
+    // Primero probemos solo con servicios, sin JOIN
+    const { rows } = await db.query(
+      `SELECT * FROM "Servicios" WHERE estado = TRUE ORDER BY id_servicio`
+    );
+    
+    const serviciosPublicos = rows.map(s => ({
+      IdServicio: s.id_servicio,
+      IdNegocio: s.id_negocio,
+      NombreServicio: s.nombre_servicio,
+      Descripcion: s.descripcion,
+      Precio: Number(s.precio),
+      DuracionMinutos: s.duracion_minutos
+    }));
+    
+    res.json(serviciosPublicos);
+  } catch (e) {
+    console.error("Error GET /servicios/public/all:", e);
+    res.status(500).json({ message: "Error", detail: String(e) });
+  }
+});
+
+// ---------- GET /servicios/public/negocio/:idNegocio ----------
+// Lista servicios ACTIVOS de un negocio específico (público - sin auth)
+router.get("/public/negocio/:idNegocio", async (req, res) => {
+  try {
+    const idNegocio = Number(req.params.idNegocio);
+    
+    if (!idNegocio || isNaN(idNegocio)) {
+      return res.status(400).json({ message: "ID de negocio inválido" });
+    }
+
+    const { rows } = await db.query(
+      `SELECT * FROM "Servicios" 
+       WHERE id_negocio = $1 AND estado = TRUE
+       ORDER BY id_servicio`,
+      [idNegocio]
+    );
+
+    if (!rows.length) {
+      return res.status(404).json({ 
+        message: "No se encontraron servicios activos para este negocio" 
+      });
+    }
+    
+    const serviciosPublicos = rows.map(s => ({
+      IdServicio: s.id_servicio,
+      IdNegocio: s.id_negocio,
+      NombreServicio: s.nombre_servicio,
+      Descripcion: s.descripcion,
+      Precio: Number(s.precio),
+      DuracionMinutos: s.duracion_minutos
+    }));
+    
+    res.json(serviciosPublicos);
+  } catch (e) {
+    console.error("Error GET /servicios/public/negocio/:idNegocio:", e);
+    res.status(500).json({ message: "Error", detail: String(e) });
   }
 });
 
