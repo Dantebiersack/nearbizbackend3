@@ -425,4 +425,70 @@ router.patch("/:id/restore", async (req, res) => {
   }
 });
 
+
+//Apis sin token 
+// ---------- GET /servicios/public/all ----------
+// Lista TODOS los servicios ACTIVOS (público - sin auth)
+router.get("/public/all", async (req, res) => {
+  try {
+    // Primero probemos solo con servicios, sin JOIN
+    const { rows } = await db.query(
+      `SELECT * FROM "Servicios" WHERE estado = TRUE ORDER BY id_servicio`
+    );
+    
+    const serviciosPublicos = rows.map(s => ({
+      IdServicio: s.id_servicio,
+      IdNegocio: s.id_negocio,
+      NombreServicio: s.nombre_servicio,
+      Descripcion: s.descripcion,
+      Precio: Number(s.precio),
+      DuracionMinutos: s.duracion_minutos
+    }));
+    
+    res.json(serviciosPublicos);
+  } catch (e) {
+    console.error("Error GET /servicios/public/all:", e);
+    res.status(500).json({ message: "Error", detail: String(e) });
+  }
+});
+
+// ---------- GET /servicios/public/negocio/:idNegocio ----------
+// Lista servicios ACTIVOS de un negocio específico (público - sin auth)
+router.get("/public/negocio/:idNegocio", async (req, res) => {
+  try {
+    const idNegocio = Number(req.params.idNegocio);
+    
+    if (!idNegocio || isNaN(idNegocio)) {
+      return res.status(400).json({ message: "ID de negocio inválido" });
+    }
+
+    const { rows } = await db.query(
+      `SELECT * FROM "Servicios" 
+       WHERE id_negocio = $1 AND estado = TRUE
+       ORDER BY id_servicio`,
+      [idNegocio]
+    );
+
+    if (!rows.length) {
+      return res.status(404).json({ 
+        message: "No se encontraron servicios activos para este negocio" 
+      });
+    }
+    
+    const serviciosPublicos = rows.map(s => ({
+      IdServicio: s.id_servicio,
+      IdNegocio: s.id_negocio,
+      NombreServicio: s.nombre_servicio,
+      Descripcion: s.descripcion,
+      Precio: Number(s.precio),
+      DuracionMinutos: s.duracion_minutos
+    }));
+    
+    res.json(serviciosPublicos);
+  } catch (e) {
+    console.error("Error GET /servicios/public/negocio/:idNegocio:", e);
+    res.status(500).json({ message: "Error", detail: String(e) });
+  }
+});
+
 module.exports = router;
