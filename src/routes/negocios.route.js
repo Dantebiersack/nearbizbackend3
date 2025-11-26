@@ -2,7 +2,9 @@
 const { Router } = require("express");
 const db = require("../db");
 const { created, noContent } = require("../utils/respond");
-const { decodeJwt } = require("../utils/jwt"); // Helper para JWT
+const { decodeJwt } = require("../utils/jwt");
+const { enviarCorreo } = require("../utils/mailer");
+const bcrypt = require("bcryptjs");
 
 const router = Router();
 
@@ -26,7 +28,7 @@ function getUserFromAuthHeader(req) {
   return { idUsuario, rol };
 }
 
-// --- Función para mapear DB → DTO ---
+// --- Map DB -> DTO ---
 function mapToDto(r) {
   return {
     IdNegocio: r.id_negocio,
@@ -45,8 +47,19 @@ function mapToDto(r) {
   };
 }
 
-// -------------------------
-// GET all
+// --- GET solicitudes ---
+router.get("/solicitudes", async (req, res) => {
+  try {
+    const { rows } = await db.query(
+      `SELECT ${COLS} FROM "Negocios" WHERE "estado" = FALSE ORDER BY "id_negocio";`
+    );
+    return res.json(rows.map(mapToDto));
+  } catch (e) {
+    return res.status(500).json({ message: "Error", detail: String(e) });
+  }
+});
+
+// --- GET all ---
 router.get("/", async (req, res) => {
   try {
     const includeInactive = (req.query.includeInactive || "false").toLowerCase() === "true";
@@ -61,7 +74,7 @@ router.get("/", async (req, res) => {
   }
 });
 
-// GET by id
+// --- GET by id ---
 router.get("/:id(\\d+)", async (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -73,39 +86,82 @@ router.get("/:id(\\d+)", async (req, res) => {
   }
 });
 
-// POST create
+// --- CREATE negocio + usuario adminNegocio ---
 router.post("/", async (req, res) => {
+  const client = await db.pool.connect();
   try {
+    await client.query("BEGIN");
+
     const dto = req.body;
-    const ins = await db.query(
+    const horarioJson = dto.horarioAtencion ? JSON.stringify(dto.horarioAtencion) : JSON.stringify({});
+
+    // --- Insertar negocio ---
+    const { rows: negocioRows } = await client.query(
       `INSERT INTO "Negocios"(
-        "id_categoria", "id_membresia", "nombre", "direccion", "coordenadas_lat", 
-        "coordenadas_lng", "descripcion", "telefono_contacto", "correo_contacto", 
-        "horario_atencion", "linkUrl", "estado"
-      )
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,TRUE)
+        "id_categoria","id_membresia","nombre","direccion",
+        "coordenadas_lat","coordenadas_lng","descripcion",
+        "telefono_contacto","correo_contacto","horario_atencion",
+        "estado","linkUrl"
+      ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
       RETURNING ${COLS};`,
       [
-        dto.IdCategoria,
-        dto.IdMembresia || null,
+        dto.idCategoria,
+        dto.idMembresia || null,
         dto.Nombre,
-        dto.Direccion || null,
-        dto.CoordenadasLat || null,
-        dto.CoordenadasLng || null,
-        dto.Descripcion || null,
-        dto.TelefonoContacto || null,
-        dto.CorreoContacto || null,
-        dto.HorarioAtencion || null,
-        dto.LinkUrl || null
+        dto.direccion || null,
+        dto.coordenadasLat || null,
+        dto.coordenadasLng || null,
+        dto.descripcion || null,
+        dto.telefonoContacto || null,
+        dto.correoContacto || null,
+        horarioJson,
+        false,
+        dto.linkUrl || null
       ]
     );
-    return created(res, `/api/Negocios/${ins.rows[0].id_negocio}`, mapToDto(ins.rows[0]));
+
+    const negocio = negocioRows[0];
+
+   
+  // --- Crear usuario adminNegocio ---
+const passLimpia = dto.contrasena; // SIN HASH
+
+const { rows: userRows } = await client.query(
+  `INSERT INTO "Usuarios"("nombre", "email", "contrasena_hash", "id_rol", "estado")
+   VALUES($1, $2, $3, $4, TRUE)
+   RETURNING "id_usuario";`,
+  [
+    dto.nombreUsuario,
+    dto.email,
+    passLimpia,
+    2
+  ]
+);
+
+
+    const usuario = userRows[0];
+
+    // --- Vincular usuario con negocio ---
+   await client.query(
+  `INSERT INTO "Personal"("id_usuario","id_negocio")
+   VALUES($1,$2);`,
+  [usuario.id_usuario, negocio.id_negocio]
+);
+
+
+    await client.query("COMMIT");
+
+    return created(res, `/api/Negocios/${negocio.id_negocio}`, mapToDto(negocio));
   } catch (e) {
+    await client.query("ROLLBACK");
+    console.log("❌ ERROR POST /Negocios:", e);
     return res.status(500).json({ message: "Error", detail: String(e) });
+  } finally {
+    client.release();
   }
 });
 
-// PUT update
+// --- UPDATE negocio ---
 router.put("/:id(\\d+)", async (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -137,7 +193,7 @@ router.put("/:id(\\d+)", async (req, res) => {
   }
 });
 
-// DELETE soft delete
+// --- DELETE negocio ---
 router.delete("/:id(\\d+)", async (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -148,7 +204,7 @@ router.delete("/:id(\\d+)", async (req, res) => {
   }
 });
 
-// PATCH restore
+// --- RESTORE negocio ---
 router.patch("/:id(\\d+)/restore", async (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -159,31 +215,61 @@ router.patch("/:id(\\d+)/restore", async (req, res) => {
   }
 });
 
-// PATCH aprobar negocio
+// --- APROBAR negocio (envía correo) ---
 router.patch("/:id(\\d+)/approve", async (req, res) => {
   try {
     const id = Number(req.params.id);
-    await db.query(`UPDATE "Negocios" SET "estado"=TRUE WHERE "id_negocio"=$1;`, [id]);
+    const { rows } = await db.query(
+      `UPDATE "Negocios" SET "estado"=TRUE WHERE "id_negocio"=$1 RETURNING *;`,
+      [id]
+    );
+    if (!rows.length) return res.status(404).json({ message: "No encontrado" });
+
+    const negocio = rows[0];
+    const asunto = "Tu empresa ha sido aprobada en NearBiz";
+    const mensaje = `
+      <p>¡Hola ${negocio.nombre}!</p>
+      <p>Tu solicitud de registro ha sido <strong>aprobada</strong>.</p>
+      <p>Usuario: ${negocio.correo_contacto}</p>
+      <p>Contraseña: (la que configuraste al registrarte)</p>
+      <p>Ahora puedes iniciar sesión en NearBiz.</p>
+    `;
+    await enviarCorreo(negocio.correo_contacto, asunto, mensaje);
+
     return noContent(res);
   } catch (e) {
-    return res.status(500).json({ message: "Error", detail: String(e) });
+    return res.status(500).json({ message: "Error interno", detail: String(e) });
   }
 });
 
-// PATCH rechazar negocio
+// --- RECHAZAR negocio ---
 router.patch("/:id(\\d+)/reject", async (req, res) => {
   try {
     const id = Number(req.params.id);
-    await db.query(`UPDATE "Negocios" SET "estado"=FALSE WHERE "id_negocio"=$1;`, [id]);
+    const { rows } = await db.query(
+      `UPDATE "Negocios" SET "estado"=FALSE WHERE "id_negocio"=$1 RETURNING *;`,
+      [id]
+    );
+    if (!rows.length) return res.status(404).json({ message: "No encontrado" });
+
+    const negocio = rows[0];
+    const motivo = req.body.motivoRechazo || "No se especificó un motivo";
+    const asunto = "Tu empresa ha sido rechazada en NearBiz";
+    const mensaje = `
+      <p>¡Hola ${negocio.nombre}!</p>
+      <p>Tu solicitud de registro ha sido <strong>rechazada</strong>.</p>
+      <p>Motivo: ${motivo}</p>
+      <p>Si tienes dudas, contacta con NearBiz.</p>
+    `;
+    await enviarCorreo(negocio.correo_contacto, asunto, mensaje);
+
     return noContent(res);
   } catch (e) {
-    return res.status(500).json({ message: "Error", detail: String(e) });
+    return res.status(500).json({ message: "Error interno", detail: String(e) });
   }
 });
 
-
-
-// --- GET MiNegocio unificado
+// --- MiNegocio GET ---
 router.get("/MiNegocio", async (req, res) => {
   try {
     const auth = getUserFromAuthHeader(req);
@@ -191,24 +277,19 @@ router.get("/MiNegocio", async (req, res) => {
 
     let idNegocio = null;
 
-    // Dependiendo del rol
     if (auth.rol === "adminNegocio" || auth.rol === "personal") {
-      // Buscar id_negocio en Personal
       const { rows: personalRows } = await db.query(
         `SELECT "id_negocio" FROM "Personal" WHERE "id_usuario"=$1 LIMIT 1;`,
         [auth.idUsuario]
       );
       if (!personalRows.length) return res.json(null);
       idNegocio = personalRows[0].id_negocio;
-
     } else if (auth.rol === "adminNearbiz" && req.query.idNegocio) {
-      // Admin de la plataforma puede pasar idNegocio por query
       idNegocio = Number(req.query.idNegocio);
     } else {
       return res.status(403).json({ message: "Rol no autorizado" });
     }
 
-    // Traer negocio
     const { rows: negocioRows } = await db.query(
       `SELECT ${COLS} FROM "Negocios" WHERE "id_negocio"=$1 LIMIT 1;`,
       [idNegocio]
@@ -216,13 +297,12 @@ router.get("/MiNegocio", async (req, res) => {
     if (!negocioRows.length) return res.json(null);
 
     return res.json(mapToDto(negocioRows[0]));
-
   } catch (e) {
     return res.status(500).json({ message: "Error interno", detail: String(e) });
   }
 });
 
-// --- PUT MiNegocio unificado
+// --- MiNegocio PUT ---
 router.put("/MiNegocio", async (req, res) => {
   try {
     const auth = getUserFromAuthHeader(req);
@@ -237,7 +317,6 @@ router.put("/MiNegocio", async (req, res) => {
       );
       if (!personalRows.length) return res.status(404).json({ message: "No tienes un negocio vinculado" });
       idNegocio = personalRows[0].id_negocio;
-
     } else if (auth.rol === "adminNearbiz" && req.body.IdNegocio) {
       idNegocio = Number(req.body.IdNegocio);
     } else {
@@ -245,7 +324,6 @@ router.put("/MiNegocio", async (req, res) => {
     }
 
     const dto = req.body;
-
     const q = `
       UPDATE "Negocios" SET
         "id_categoria"=$1, "id_membresia"=$2, "nombre"=$3, "direccion"=$4,
@@ -274,13 +352,9 @@ router.put("/MiNegocio", async (req, res) => {
     if (!updatedRows.length) return res.status(404).json({ message: "Negocio no encontrado" });
 
     return res.json({ message: "Actualizado correctamente", negocio: mapToDto(updatedRows[0]) });
-
   } catch (e) {
     return res.status(500).json({ message: "Error interno", detail: String(e) });
   }
 });
-
-
-
 
 module.exports = router;
