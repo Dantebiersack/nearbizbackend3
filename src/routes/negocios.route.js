@@ -43,6 +43,7 @@ function mapToDto(r) {
     HorarioAtencion: r.horario_atencion,
     Estado: r.estado,
     LinkUrl: r.linkUrl,
+    // 👇 Campos Nuevos para la tabla
     AdminNombre: r.admin_nombre || "Sin Asignar",
     AdminEmail: r.admin_email || ""
   };
