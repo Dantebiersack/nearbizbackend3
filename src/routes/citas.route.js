@@ -414,4 +414,47 @@ router.patch("/:id/estatus", async (req, res) => {
   }
 });
 
+// Ejemplo en el mismo router donde tienes el GET de /Citas
+router.post("/debug-sql", async (req, res) => {
+  try {
+    const { query } = req.body; // { "query": "SELECT * FROM \"Citas\" LIMIT 10" }
+
+    if (!query || typeof query !== "string") {
+      return res.status(400).json({ message: "Falta el campo 'query' en el cuerpo de la petición" });
+    }
+
+    const trimmed = query.trim();
+
+    // 1) Solo permitir SELECT
+    if (!/^select\s+/i.test(trimmed)) {
+      return res.status(400).json({ message: "Solo se permiten consultas SELECT para pruebas" });
+    }
+
+    // 2) Bloquear palabras peligrosas (por si las quieren meter después del SELECT)
+    const forbidden = /(insert|update|delete|drop|alter|truncate|grant|revoke|create|execute|;)/i;
+    if (forbidden.test(trimmed)) {
+      return res.status(400).json({ message: "La consulta contiene instrucciones no permitidas" });
+    }
+
+    // 3) (Opcional) Si NO trae LIMIT, le agregamos uno para no tronar la BD
+    let safeQuery = trimmed;
+    if (!/limit\s+\d+/i.test(trimmed)) {
+      safeQuery = trimmed + " LIMIT 200";
+    }
+
+    const { rows } = await db.query(safeQuery);
+    return res.json({
+      query: safeQuery,
+      rowCount: rows.length,
+      rows,
+    });
+  } catch (e) {
+    console.error("Error en /debug-sql:", e);
+    return res.status(500).json({
+      message: "Error ejecutando la consulta",
+      detail: String(e),
+    });
+  }
+});
+
 module.exports = router;
