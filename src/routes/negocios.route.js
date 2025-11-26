@@ -122,32 +122,29 @@ router.post("/", async (req, res) => {
 
     const negocio = negocioRows[0];
 
-   
-  // --- Crear usuario adminNegocio ---
-const passLimpia = dto.contrasena; // SIN HASH
+    // --- Crear usuario adminNegocio ---
+    const passLimpia = dto.contrasena; // SIN HASH
 
-const { rows: userRows } = await client.query(
-  `INSERT INTO "Usuarios"("nombre", "email", "contrasena_hash", "id_rol", "estado")
-   VALUES($1, $2, $3, $4, TRUE)
-   RETURNING "id_usuario";`,
-  [
-    dto.nombreUsuario,
-    dto.email,
-    passLimpia,
-    2
-  ]
-);
-
+    const { rows: userRows } = await client.query(
+      `INSERT INTO "Usuarios"("nombre", "email", "contrasena_hash", "id_rol", "estado")
+       VALUES($1, $2, $3, $4, TRUE)
+       RETURNING "id_usuario";`,
+      [
+        dto.nombreUsuario,
+        dto.email,
+        passLimpia,
+        2
+      ]
+    );
 
     const usuario = userRows[0];
 
     // --- Vincular usuario con negocio ---
-   await client.query(
-  `INSERT INTO "Personal"("id_usuario","id_negocio")
-   VALUES($1,$2);`,
-  [usuario.id_usuario, negocio.id_negocio]
-);
-
+    await client.query(
+      `INSERT INTO "Personal"("id_usuario","id_negocio")
+       VALUES($1,$2);`,
+      [usuario.id_usuario, negocio.id_negocio]
+    );
 
     await client.query("COMMIT");
 
@@ -193,22 +190,47 @@ router.put("/:id(\\d+)", async (req, res) => {
   }
 });
 
-// --- DELETE negocio ---
+// --- DELETE negocio (MODIFICADO: Desactiva Admin también) ---
 router.delete("/:id(\\d+)", async (req, res) => {
   try {
     const id = Number(req.params.id);
+    
+    // 1. Desactivar Negocio
     await db.query(`UPDATE "Negocios" SET "estado"=FALSE WHERE "id_negocio"=$1;`, [id]);
+
+    // 2. Buscar personal asociado a ese negocio (incluye al Admin/Dueño)
+    const { rows } = await db.query(`SELECT "id_usuario" FROM "Personal" WHERE "id_negocio"=$1`, [id]);
+    
+    // 3. Desactivar a esos usuarios
+    if (rows.length > 0) {
+        const idsUsuarios = rows.map(r => r.id_usuario);
+        // Usamos ANY($1) para actualizar múltiples IDs en una sola consulta
+        await db.query(`UPDATE "Usuarios" SET "estado"=FALSE WHERE "id_usuario" = ANY($1::int[])`, [idsUsuarios]);
+    }
+
     return noContent(res);
   } catch (e) {
     return res.status(500).json({ message: "Error", detail: String(e) });
   }
 });
 
-// --- RESTORE negocio ---
+// --- RESTORE negocio (MODIFICADO: Activa Admin también) ---
 router.patch("/:id(\\d+)/restore", async (req, res) => {
   try {
     const id = Number(req.params.id);
+    
+    // 1. Activar Negocio
     await db.query(`UPDATE "Negocios" SET "estado"=TRUE WHERE "id_negocio"=$1;`, [id]);
+
+    // 2. Buscar personal asociado
+    const { rows } = await db.query(`SELECT "id_usuario" FROM "Personal" WHERE "id_negocio"=$1`, [id]);
+
+    // 3. Activar a esos usuarios
+    if (rows.length > 0) {
+        const idsUsuarios = rows.map(r => r.id_usuario);
+        await db.query(`UPDATE "Usuarios" SET "estado"=TRUE WHERE "id_usuario" = ANY($1::int[])`, [idsUsuarios]);
+    }
+
     return noContent(res);
   } catch (e) {
     return res.status(500).json({ message: "Error", detail: String(e) });
@@ -219,11 +241,20 @@ router.patch("/:id(\\d+)/restore", async (req, res) => {
 router.patch("/:id(\\d+)/approve", async (req, res) => {
   try {
     const id = Number(req.params.id);
+    // Aprobamos negocio
     const { rows } = await db.query(
       `UPDATE "Negocios" SET "estado"=TRUE WHERE "id_negocio"=$1 RETURNING *;`,
       [id]
     );
     if (!rows.length) return res.status(404).json({ message: "No encontrado" });
+
+    // Aprobamos también a los usuarios vinculados (el dueño)
+    // Buscamos ids
+    const personalRes = await db.query(`SELECT "id_usuario" FROM "Personal" WHERE "id_negocio"=$1`, [id]);
+    if (personalRes.rows.length > 0) {
+       const ids = personalRes.rows.map(r => r.id_usuario);
+       await db.query(`UPDATE "Usuarios" SET "estado"=TRUE WHERE "id_usuario" = ANY($1::int[])`, [ids]);
+    }
 
     const negocio = rows[0];
     const asunto = "Tu empresa ha sido aprobada en NearBiz";
@@ -246,11 +277,19 @@ router.patch("/:id(\\d+)/approve", async (req, res) => {
 router.patch("/:id(\\d+)/reject", async (req, res) => {
   try {
     const id = Number(req.params.id);
+    // Rechazar negocio
     const { rows } = await db.query(
       `UPDATE "Negocios" SET "estado"=FALSE WHERE "id_negocio"=$1 RETURNING *;`,
       [id]
     );
     if (!rows.length) return res.status(404).json({ message: "No encontrado" });
+
+    // Rechazar usuarios vinculados
+    const personalRes = await db.query(`SELECT "id_usuario" FROM "Personal" WHERE "id_negocio"=$1`, [id]);
+    if (personalRes.rows.length > 0) {
+       const ids = personalRes.rows.map(r => r.id_usuario);
+       await db.query(`UPDATE "Usuarios" SET "estado"=FALSE WHERE "id_usuario" = ANY($1::int[])`, [ids]);
+    }
 
     const negocio = rows[0];
     const motivo = req.body.motivoRechazo || "No se especificó un motivo";
