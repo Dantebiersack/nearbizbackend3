@@ -66,9 +66,10 @@ router.get("/", async (req, res) => {
   try {
     const includeInactive = (req.query.includeInactive || "false").toLowerCase() === "true";
     
-    // Consulta con JOIN para traer el nombre del Administrador
+    // 👇 CAMBIO AQUÍ: Agregamos 'DISTINCT ON (n."id_negocio")'
+    // Esto le dice a la BD: "Si hay duplicados del mismo negocio, dame solo el primero".
     let q = `
-      SELECT 
+      SELECT DISTINCT ON (n."id_negocio")
         n.*,
         u."nombre" as admin_nombre,
         u."email" as admin_email
@@ -81,6 +82,7 @@ router.get("/", async (req, res) => {
       q += ` WHERE n."estado" = TRUE`;
     }
 
+    // DISTINCT ON requiere que el ORDER BY empiece con la misma columna
     q += ` ORDER BY n."id_negocio"`;
 
     const { rows } = await db.query(q);
