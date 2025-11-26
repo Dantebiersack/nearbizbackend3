@@ -1,4 +1,3 @@
-// Archivo: routes/negocios.js
 const { Router } = require("express");
 const db = require("../db");
 const { created, noContent } = require("../utils/respond");
@@ -28,7 +27,7 @@ function getUserFromAuthHeader(req) {
   return { idUsuario, rol };
 }
 
-// --- Map DB -> DTO ---
+// --- Map DB -> DTO (MODIFICADO: Incluye Admin) ---
 function mapToDto(r) {
   return {
     IdNegocio: r.id_negocio,
@@ -43,7 +42,9 @@ function mapToDto(r) {
     CorreoContacto: r.correo_contacto,
     HorarioAtencion: r.horario_atencion,
     Estado: r.estado,
-    LinkUrl: r.linkUrl
+    LinkUrl: r.linkUrl,
+    AdminNombre: r.admin_nombre || "Sin Asignar",
+    AdminEmail: r.admin_email || ""
   };
 }
 
@@ -59,13 +60,27 @@ router.get("/solicitudes", async (req, res) => {
   }
 });
 
-// --- GET all ---
+// --- GET all (MODIFICADO con JOIN) ---
 router.get("/", async (req, res) => {
   try {
     const includeInactive = (req.query.includeInactive || "false").toLowerCase() === "true";
-    const q = includeInactive
-      ? `SELECT ${COLS} FROM "Negocios" ORDER BY "id_negocio";`
-      : `SELECT ${COLS} FROM "Negocios" WHERE "estado"=TRUE ORDER BY "id_negocio";`;
+    
+    // Consulta con JOIN para traer el nombre del Administrador
+    let q = `
+      SELECT 
+        n.*,
+        u."nombre" as admin_nombre,
+        u."email" as admin_email
+      FROM "Negocios" n
+      LEFT JOIN "Personal" p ON n."id_negocio" = p."id_negocio" AND (p."rol_en_negocio" = 'Administrador' OR p."rol_en_negocio" = 'Dueño')
+      LEFT JOIN "Usuarios" u ON p."id_usuario" = u."id_usuario"
+    `;
+
+    if (!includeInactive) {
+      q += ` WHERE n."estado" = TRUE`;
+    }
+
+    q += ` ORDER BY n."id_negocio"`;
 
     const { rows } = await db.query(q);
     return res.json(rows.map(mapToDto));
@@ -105,33 +120,33 @@ router.post("/", async (req, res) => {
       ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
       RETURNING ${COLS};`,
       [
-        dto.idCategoria,
-        dto.idMembresia || null,
+        dto.IdCategoria, // Ajuste para leer PascalCase si viene del front nuevo
+        dto.IdMembresia || null,
         dto.Nombre,
-        dto.direccion || null,
-        dto.coordenadasLat || null,
-        dto.coordenadasLng || null,
-        dto.descripcion || null,
-        dto.telefonoContacto || null,
-        dto.correoContacto || null,
+        dto.Direccion || null,
+        dto.CoordenadasLat || null,
+        dto.CoordenadasLng || null,
+        dto.Descripcion || null,
+        dto.TelefonoContacto || null,
+        dto.CorreoContacto || null,
         horarioJson,
         false,
-        dto.linkUrl || null
+        dto.LinkUrl || null
       ]
     );
 
     const negocio = negocioRows[0];
 
     // --- Crear usuario adminNegocio ---
-    const passLimpia = dto.contrasena; // SIN HASH
+    const passLimpia = dto.ContrasenaHash || dto.contrasena; // Soporte para ambos nombres
 
     const { rows: userRows } = await client.query(
       `INSERT INTO "Usuarios"("nombre", "email", "contrasena_hash", "id_rol", "estado")
        VALUES($1, $2, $3, $4, TRUE)
        RETURNING "id_usuario";`,
       [
-        dto.nombreUsuario,
-        dto.email,
+        dto.Nombre || dto.nombreUsuario,
+        dto.Email || dto.email,
         passLimpia,
         2
       ]
@@ -141,8 +156,8 @@ router.post("/", async (req, res) => {
 
     // --- Vincular usuario con negocio ---
     await client.query(
-      `INSERT INTO "Personal"("id_usuario","id_negocio")
-       VALUES($1,$2);`,
+      `INSERT INTO "Personal"("id_usuario","id_negocio", "rol_en_negocio", "estado", "fecha_registro")
+       VALUES($1,$2, 'Administrador', TRUE, CURRENT_TIMESTAMP);`,
       [usuario.id_usuario, negocio.id_negocio]
     );
 
@@ -190,21 +205,17 @@ router.put("/:id(\\d+)", async (req, res) => {
   }
 });
 
-// --- DELETE negocio (MODIFICADO: Desactiva Admin también) ---
+// --- DELETE negocio (Desactiva Admin también) ---
 router.delete("/:id(\\d+)", async (req, res) => {
   try {
     const id = Number(req.params.id);
     
-    // 1. Desactivar Negocio
     await db.query(`UPDATE "Negocios" SET "estado"=FALSE WHERE "id_negocio"=$1;`, [id]);
 
-    // 2. Buscar personal asociado a ese negocio (incluye al Admin/Dueño)
     const { rows } = await db.query(`SELECT "id_usuario" FROM "Personal" WHERE "id_negocio"=$1`, [id]);
     
-    // 3. Desactivar a esos usuarios
     if (rows.length > 0) {
         const idsUsuarios = rows.map(r => r.id_usuario);
-        // Usamos ANY($1) para actualizar múltiples IDs en una sola consulta
         await db.query(`UPDATE "Usuarios" SET "estado"=FALSE WHERE "id_usuario" = ANY($1::int[])`, [idsUsuarios]);
     }
 
@@ -214,18 +225,15 @@ router.delete("/:id(\\d+)", async (req, res) => {
   }
 });
 
-// --- RESTORE negocio (MODIFICADO: Activa Admin también) ---
+// --- RESTORE negocio (Activa Admin también) ---
 router.patch("/:id(\\d+)/restore", async (req, res) => {
   try {
     const id = Number(req.params.id);
     
-    // 1. Activar Negocio
     await db.query(`UPDATE "Negocios" SET "estado"=TRUE WHERE "id_negocio"=$1;`, [id]);
 
-    // 2. Buscar personal asociado
     const { rows } = await db.query(`SELECT "id_usuario" FROM "Personal" WHERE "id_negocio"=$1`, [id]);
 
-    // 3. Activar a esos usuarios
     if (rows.length > 0) {
         const idsUsuarios = rows.map(r => r.id_usuario);
         await db.query(`UPDATE "Usuarios" SET "estado"=TRUE WHERE "id_usuario" = ANY($1::int[])`, [idsUsuarios]);
@@ -237,19 +245,16 @@ router.patch("/:id(\\d+)/restore", async (req, res) => {
   }
 });
 
-// --- APROBAR negocio (envía correo) ---
+// --- APROBAR negocio ---
 router.patch("/:id(\\d+)/approve", async (req, res) => {
   try {
     const id = Number(req.params.id);
-    // Aprobamos negocio
     const { rows } = await db.query(
       `UPDATE "Negocios" SET "estado"=TRUE WHERE "id_negocio"=$1 RETURNING *;`,
       [id]
     );
     if (!rows.length) return res.status(404).json({ message: "No encontrado" });
 
-    // Aprobamos también a los usuarios vinculados (el dueño)
-    // Buscamos ids
     const personalRes = await db.query(`SELECT "id_usuario" FROM "Personal" WHERE "id_negocio"=$1`, [id]);
     if (personalRes.rows.length > 0) {
        const ids = personalRes.rows.map(r => r.id_usuario);
@@ -277,14 +282,12 @@ router.patch("/:id(\\d+)/approve", async (req, res) => {
 router.patch("/:id(\\d+)/reject", async (req, res) => {
   try {
     const id = Number(req.params.id);
-    // Rechazar negocio
     const { rows } = await db.query(
       `UPDATE "Negocios" SET "estado"=FALSE WHERE "id_negocio"=$1 RETURNING *;`,
       [id]
     );
     if (!rows.length) return res.status(404).json({ message: "No encontrado" });
 
-    // Rechazar usuarios vinculados
     const personalRes = await db.query(`SELECT "id_usuario" FROM "Personal" WHERE "id_negocio"=$1`, [id]);
     if (personalRes.rows.length > 0) {
        const ids = personalRes.rows.map(r => r.id_usuario);
@@ -335,6 +338,8 @@ router.get("/MiNegocio", async (req, res) => {
     );
     if (!negocioRows.length) return res.json(null);
 
+    // En este endpoint específico, quizás quieras agregar el admin también, o dejarlo simple.
+    // Por ahora lo dejamos simple según lo tenías.
     return res.json(mapToDto(negocioRows[0]));
   } catch (e) {
     return res.status(500).json({ message: "Error interno", detail: String(e) });
