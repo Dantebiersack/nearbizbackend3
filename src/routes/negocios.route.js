@@ -282,7 +282,7 @@ router.patch("/:id(\\d+)/approve", async (req, res) => {
   }
 });
 
-
+/*
 // --- APROBAR negocio ---
 router.patch("/:id(\\d+)/approve", async (req, res) => {
   try {
@@ -315,7 +315,7 @@ router.patch("/:id(\\d+)/approve", async (req, res) => {
     return res.status(500).json({ message: "Error interno", detail: String(e) });
   }
 });
-
+*/
 // --- RECHAZAR negocio ---
 router.patch("/:id(\\d+)/reject", async (req, res) => {
   try {
