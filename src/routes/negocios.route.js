@@ -121,19 +121,20 @@ router.post("/", async (req, res) => {
       ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
       RETURNING ${COLS};`,
       [
-        dto.IdCategoria, // Ajuste para leer PascalCase si viene del front nuevo
-        dto.IdMembresia || null,
-        dto.Nombre,
-        dto.Direccion || null,
-        dto.CoordenadasLat || null,
-        dto.CoordenadasLng || null,
-        dto.Descripcion || null,
-        dto.TelefonoContacto || null,
-        dto.CorreoContacto || null,
-        horarioJson,
-        false,
-        dto.LinkUrl || null
-      ]
+  dto.IdCategoria || dto.idCategoria,  // ← AQUI QUEDA EL FIX
+  dto.IdMembresia || dto.idMembresia,
+  dto.Nombre,
+  dto.Direccion,
+  dto.CoordenadasLat,
+  dto.CoordenadasLng,
+  dto.Descripcion,
+  dto.TelefonoContacto,
+  dto.CorreoContacto,
+  horarioJson,
+  false,
+  dto.LinkUrl
+]
+
     );
 
     const negocio = negocioRows[0];
