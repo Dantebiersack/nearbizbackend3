@@ -123,19 +123,20 @@ router.post("/", async (req, res) => {
       ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
       RETURNING ${COLS};`,
       [
-        dto.IdCategoria, // Ajuste para leer PascalCase si viene del front nuevo
-        dto.IdMembresia || null,
-        dto.Nombre,
-        dto.Direccion || null,
-        dto.CoordenadasLat || null,
-        dto.CoordenadasLng || null,
-        dto.Descripcion || null,
-        dto.TelefonoContacto || null,
-        dto.CorreoContacto || null,
-        horarioJson,
-        false,
-        dto.LinkUrl || null
-      ]
+  dto.IdCategoria || dto.idCategoria,  // ← AQUI QUEDA EL FIX
+  dto.IdMembresia || dto.idMembresia,
+  dto.Nombre,
+  dto.Direccion,
+  dto.CoordenadasLat,
+  dto.CoordenadasLng,
+  dto.Descripcion,
+  dto.TelefonoContacto,
+  dto.CorreoContacto,
+  horarioJson,
+  false,
+  dto.LinkUrl
+]
+
     );
 
     const negocio = negocioRows[0];
@@ -228,26 +229,62 @@ router.delete("/:id(\\d+)", async (req, res) => {
   }
 });
 
-// --- RESTORE negocio (Activa Admin también) ---
-router.patch("/:id(\\d+)/restore", async (req, res) => {
+router.patch("/:id(\\d+)/approve", async (req, res) => {
   try {
     const id = Number(req.params.id);
-    
-    await db.query(`UPDATE "Negocios" SET "estado"=TRUE WHERE "id_negocio"=$1;`, [id]);
 
-    const { rows } = await db.query(`SELECT "id_usuario" FROM "Personal" WHERE "id_negocio"=$1`, [id]);
+    // 1. Activar negocio
+    await db.query(
+      `UPDATE "Negocios" SET "estado"=TRUE WHERE "id_negocio"=$1;`,
+      [id]
+    );
 
-    if (rows.length > 0) {
-        const idsUsuarios = rows.map(r => r.id_usuario);
-        await db.query(`UPDATE "Usuarios" SET "estado"=TRUE WHERE "id_usuario" = ANY($1::int[])`, [idsUsuarios]);
-    }
+    // 2. Obtener admin del negocio con JOIN
+    const { rows } = await db.query(`
+      SELECT 
+        n.*,
+        u."email" AS admin_email,
+        u."nombre" AS admin_nombre
+      FROM "Negocios" n
+      LEFT JOIN "Personal" p ON n."id_negocio" = p."id_negocio"
+      LEFT JOIN "Usuarios" u ON p."id_usuario" = u."id_usuario"
+      WHERE n."id_negocio" = $1
+      LIMIT 1;
+    `, [id]);
+
+    if (!rows.length) return res.status(404).json({ message: "Negocio no encontrado" });
+
+    // 3. Activar usuario admin
+    await db.query(`
+      UPDATE "Usuarios" 
+      SET "estado"=TRUE 
+      WHERE "id_usuario" IN (
+        SELECT "id_usuario" FROM "Personal" WHERE "id_negocio"=$1
+      );
+    `, [id]);
+
+    const negocio = rows[0];
+
+    // 4. Notificar por correo
+    const asunto = "Tu empresa ha sido aprobada en NearBiz";
+    const mensaje = `
+      <p>¡Hola ${negocio.admin_nombre}!</p>
+      <p>Tu negocio <strong>${negocio.nombre}</strong> ha sido aprobado.</p>
+      <p>Usuario: ${negocio.admin_email}</p>
+      <p>Contraseña: (la que configuraste al registrarte)</p>
+      <p>Ya puedes iniciar sesión en NearBiz.</p>
+    `;
+
+    await enviarCorreo(negocio.admin_email, asunto, mensaje);
 
     return noContent(res);
   } catch (e) {
-    return res.status(500).json({ message: "Error", detail: String(e) });
+    console.log("❌ ERROR APPROVE:", e);
+    return res.status(500).json({ message: "Error interno", detail: String(e) });
   }
 });
 
+/*
 // --- APROBAR negocio ---
 router.patch("/:id(\\d+)/approve", async (req, res) => {
   try {
@@ -280,7 +317,7 @@ router.patch("/:id(\\d+)/approve", async (req, res) => {
     return res.status(500).json({ message: "Error interno", detail: String(e) });
   }
 });
-
+*/
 // --- RECHAZAR negocio ---
 router.patch("/:id(\\d+)/reject", async (req, res) => {
   try {
