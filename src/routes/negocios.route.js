@@ -122,20 +122,21 @@ router.post("/", async (req, res) => {
         "estado","linkUrl"
       ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
       RETURNING ${COLS};`,
-      [
-  dto.IdCategoria || dto.idCategoria,  // ← AQUI QUEDA EL FIX
+     [
+  dto.IdCategoria || dto.idCategoria,
   dto.IdMembresia || dto.idMembresia,
-  dto.Nombre,
-  dto.Direccion,
-  dto.CoordenadasLat,
-  dto.CoordenadasLng,
-  dto.Descripcion,
-  dto.TelefonoContacto,
-  dto.CorreoContacto,
+  dto.Nombre || dto.nombre,
+  dto.Direccion || dto.direccion,
+  dto.CoordenadasLat || dto.latitud,
+  dto.CoordenadasLng || dto.longitud,
+  dto.Descripcion || dto.descripcion,
+  dto.TelefonoContacto || dto.telefono,
+  dto.CorreoContacto || dto.correo,
   horarioJson,
   false,
-  dto.LinkUrl
+  dto.LinkUrl || dto.url
 ]
+
 
     );
 
@@ -148,12 +149,13 @@ router.post("/", async (req, res) => {
       `INSERT INTO "Usuarios"("nombre", "email", "contrasena_hash", "id_rol", "estado")
        VALUES($1, $2, $3, $4, TRUE)
        RETURNING "id_usuario";`,
-      [
-        dto.Nombre || dto.nombreUsuario,
-        dto.Email || dto.email,
-        passLimpia,
-        2
-      ]
+     [
+  dto.Nombre || dto.nombreUsuario,
+  dto.Email || dto.correo,
+  dto.ContrasenaHash || dto.contrasena,
+  2
+]
+
     );
 
     const usuario = userRows[0];
