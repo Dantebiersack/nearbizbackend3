@@ -122,19 +122,19 @@ router.post("/", async (req, res) => {
         "estado","linkUrl"
       ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
       RETURNING ${COLS};`,
-     [
+      [
   dto.IdCategoria || dto.idCategoria,
   dto.IdMembresia || dto.idMembresia,
-  dto.Nombre || dto.nombre,
+  dto.Nombre || dto.nombre || dto.nombreNegocio,
   dto.Direccion || dto.direccion,
-  dto.CoordenadasLat || dto.latitud,
-  dto.CoordenadasLng || dto.longitud,
+  dto.CoordenadasLat || dto.coordenadasLat,
+  dto.CoordenadasLng || dto.coordenadasLng,
   dto.Descripcion || dto.descripcion,
-  dto.TelefonoContacto || dto.telefono,
-  dto.CorreoContacto || dto.correo,
+  dto.TelefonoContacto || dto.telefonoContacto,
+  dto.CorreoContacto || dto.correoContacto,
   horarioJson,
   false,
-  dto.LinkUrl || dto.url
+  dto.LinkUrl || dto.linkUrl
 ]
 
 
@@ -149,9 +149,9 @@ router.post("/", async (req, res) => {
       `INSERT INTO "Usuarios"("nombre", "email", "contrasena_hash", "id_rol", "estado")
        VALUES($1, $2, $3, $4, TRUE)
        RETURNING "id_usuario";`,
-     [
-  dto.Nombre || dto.nombreUsuario,
-  dto.Email || dto.correo,
+      [
+  dto.Nombre || dto.nombreUsuario || dto.nombreNegocio,
+  dto.Email || dto.email || dto.correoContacto,
   dto.ContrasenaHash || dto.contrasena,
   2
 ]
