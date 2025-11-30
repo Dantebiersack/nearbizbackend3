@@ -71,6 +71,7 @@ function mapCitaRow(row) {
 }
 
 router.get("/by-role", async function (req, res) {
+  var tmp = "";
   try {
     const auth = getUserFromAuthHeader(req);
 
@@ -85,18 +86,21 @@ router.get("/by-role", async function (req, res) {
 
     console.log("Usuario desde JWT >>>", { idUsuario, rol });
 
-    var where = "";
-    var params = [];
+    let where = "";
+    let params = [];
 
     if (rol === "adminNearbiz") {
+      // Ve TODO
       where = "";
       params = [];
     } else if (rol === "adminNegocio") {
-      // Ajusta esta parte a tu modelo real.
-      where = 'WHERE neg."id_usuario_admin" = $1';
+      // El usuario es admin de uno o varios negocios a través de PERSONAL
+      // u_admin.id_usuario viene de la nueva unión que verás en el SQL
+      where = 'WHERE u_admin."id_usuario" = $1';
       params = [idUsuario];
     } else if (rol === "personal") {
-      where = 'WHERE tec."id_usuario" = $1';
+      // El usuario es el técnico directamente
+      where = 'WHERE u_tec."id_usuario" = $1';
       params = [idUsuario];
     } else {
       return res
@@ -121,14 +125,21 @@ router.get("/by-role", async function (req, res) {
       '  u_tec."nombre"          AS tecnico_nombre,' +
       '  s."nombre_servicio"     AS servicio_nombre ' +
       'FROM "Citas" ci ' +
-      'JOIN "Servicios" s   ON s."id_servicio"   = ci."id_servicio" ' +
-      'JOIN "Personal" tec  ON tec."id_personal" = ci."id_tecnico" ' +
-      'JOIN "Negocios" neg  ON neg."id_negocio"  = tec."id_negocio" ' +
-      'JOIN "Clientes" cli  ON cli."id_cliente"  = ci."id_cliente" ' +
-      'JOIN "Usuarios" u_cli ON u_cli."id_usuario" = cli."id_usuario" ' +
-      'JOIN "Usuarios" u_tec ON u_tec."id_usuario" = tec."id_usuario" ' +
+      'JOIN "Servicios" s        ON s."id_servicio"   = ci."id_servicio" ' +
+      'JOIN "Personal" tec       ON tec."id_personal" = ci."id_tecnico" ' +
+      'JOIN "Negocios" neg       ON neg."id_negocio"  = tec."id_negocio" ' +
+      'JOIN "Clientes" cli       ON cli."id_cliente"  = ci."id_cliente" ' +
+      'JOIN "Usuarios" u_cli     ON u_cli."id_usuario" = cli."id_usuario" ' +
+      'JOIN "Usuarios" u_tec     ON u_tec."id_usuario" = tec."id_usuario" ' +
+      // 🔹 NUEVOS JOINS para poder filtrar por admin del negocio
+      'JOIN "Personal" per_admin ON per_admin."id_negocio" = neg."id_negocio" ' +
+      'JOIN "Usuarios" u_admin   ON u_admin."id_usuario"   = per_admin."id_usuario" ' +
+      // si tienes un campo de rol en Personal, descomenta esta línea y agrégala al WHERE:
+      // '  AND per_admin."rol" = \'adminNegocio\' ' +
       (where || "") +
       ' ORDER BY ci."fecha_cita", ci."hora_inicio"';
+
+    tmp = sql;
 
     const result = await db.query(sql, params);
     const rows = result.rows || [];
@@ -136,9 +147,12 @@ router.get("/by-role", async function (req, res) {
     return res.json(rows.map(mapCita));
   } catch (e) {
     console.error("Error en GET /Citas/by-role:", e);
-    return res.status(500).json({ message: "Error", detail: String(e) });
+    return res
+      .status(500)
+      .json({ message: "Error", detail: String(e) + "\n" + tmp });
   }
 });
+
 router.get("/", async (req, res) => {
   try {
     const includeInactive = String(req.query.includeInactive || "false") === "true";
