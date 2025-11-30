@@ -107,7 +107,6 @@ router.get("/:id(\\d+)", async (req, res) => {
     return res.status(500).json({ message: "Error", detail: String(e) });
   }
 });
-
 // POST create
 router.post("/", async (req, res) => {
   try {
