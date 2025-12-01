@@ -241,22 +241,33 @@ router.patch("/:id(\\d+)/approve", async (req, res) => {
       [id]
     );
 
-    // 2. Obtener admin del negocio con JOIN
+    // 2. Obtener ÚNICAMENTE al administrador
     const { rows } = await db.query(`
-      SELECT 
-        n.*,
+      SELECT DISTINCT ON (n."id_negocio")
+        n."nombre",
         u."email" AS admin_email,
         u."nombre" AS admin_nombre
       FROM "Negocios" n
-      LEFT JOIN "Personal" p ON n."id_negocio" = p."id_negocio"
-      LEFT JOIN "Usuarios" u ON p."id_usuario" = u."id_usuario"
+      LEFT JOIN "Personal" p 
+        ON n."id_negocio" = p."id_negocio"
+        AND (p."rol_en_negocio" = 'Administrador' OR p."rol_en_negocio" = 'Dueño')
+      LEFT JOIN "Usuarios" u 
+        ON p."id_usuario" = u."id_usuario"
       WHERE n."id_negocio" = $1
-      LIMIT 1;
+      ORDER BY n."id_negocio";
     `, [id]);
 
-    if (!rows.length) return res.status(404).json({ message: "Negocio no encontrado" });
+    if (!rows.length) {
+      return res.status(404).json({ message: "No existe negocio o no tiene admin asignado" });
+    }
 
-    // 3. Activar usuario admin
+    const negocio = rows[0];
+
+    if (!negocio.admin_email) {
+      return res.status(400).json({ message: "No se encontró el correo del administrador" });
+    }
+
+    // 3. Activar usuario administrador
     await db.query(`
       UPDATE "Usuarios" 
       SET "estado"=TRUE 
@@ -265,26 +276,26 @@ router.patch("/:id(\\d+)/approve", async (req, res) => {
       );
     `, [id]);
 
-    const negocio = rows[0];
 
-    // 4. Notificar por correo
+    // 4. Enviar correo
     const asunto = "Tu empresa ha sido aprobada en NearBiz";
     const mensaje = `
-      <p>¡Hola ${negocio.admin_nombre}!</p>
+      <p>¡Hola ${negocio.admin_nombre || 'Usuario'}!</p>
       <p>Tu negocio <strong>${negocio.nombre}</strong> ha sido aprobado.</p>
       <p>Usuario: ${negocio.admin_email}</p>
-      <p>Contraseña: (la que configuraste al registrarte)</p>
-      <p>Ya puedes iniciar sesión en NearBiz.</p>
+      <p>Ya puedes iniciar sesión.</p>
     `;
 
     await enviarCorreo(negocio.admin_email, asunto, mensaje);
 
     return noContent(res);
+
   } catch (e) {
     console.log("❌ ERROR APPROVE:", e);
     return res.status(500).json({ message: "Error interno", detail: String(e) });
   }
 });
+
 
 /*
 // --- APROBAR negocio ---
