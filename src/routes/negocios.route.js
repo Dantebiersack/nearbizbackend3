@@ -297,78 +297,19 @@ router.delete("/:id(\\d+)", async (req, res) => {
 });
 */
 
-// APROBAR SOLICITUD DE NEGOCIO
-router.patch("/:id(\\d+)/approve", async (req, res) => {
-  try {
-    const id = Number(req.params.id);
-
-    const client = await db.connect();
-
-    // 🔍 1. Obtener negocio + admin (JOIN CORRECTO)
-    const { rows: negocioRows } = await client.query(
-      `SELECT n.*, u.email AS admin_email
-       FROM "Negocios" n
-       LEFT JOIN "Usuarios" u ON u.id_usuario = n.id_admin
-       WHERE n.id_negocio = $1`,
-      [id]
-    );
-
-    if (!negocioRows.length) {
-      client.release();
-      return res.status(404).json({ error: "Negocio no encontrado" });
-    }
-
-    const negocio = negocioRows[0];
-
-    // 🟦 CORREO DEL ADMIN (YA NO ES undefined)
-    const adminEmail = negocio.admin_email;
-
-    if (!adminEmail) {
-      client.release();
-      return res.status(400).json({ error: "El administrador no tiene correo registrado." });
-    }
-
-    // 🟢 2. Cambiar estado del negocio a TRUE
-    await client.query(
-      `UPDATE "Negocios"
-       SET estado = TRUE
-       WHERE id_negocio = $1`,
-      [id]
-    );
-
-    // ✉ 3. Enviar correo al dueño
-    await enviarCorreo({
-      to: adminEmail,
-      subject: "Solicitud de registro aprobada",
-      html: `
-        <h2>Tu negocio ha sido aprobado 🎉</h2>
-        <p>¡Felicidades! Tu empresa <strong>${negocio.nombre}</strong> ya está activa dentro de NearBiz.</p>
-        <p>Ahora puedes iniciar sesión y administrar toda la información de tu negocio.</p>
-      `,
-    });
-
-    client.release();
-
-    res.json({ ok: true, message: "Negocio aprobado y correo enviado." });
-  } catch (e) {
-    console.error("❌ ERROR APPROVE:", e);
-    res.status(500).json({ error: "Error al aprobar el negocio." });
-  }
-});
-
-
-
 // --- RECHAZAR SOLICITUD DE NEGOCIO (ELIMINA TODO) ---
 router.patch("/:id(\\d+)/reject", async (req, res) => {
-  const client = await db.connect();
+  const client = await db.pool.connect(); // ✔ correcto
 
   try {
     const id = Number(req.params.id);
     const { motivo } = req.body;
 
-    // 1. Obtener correo del administrador antes de borrar
+    await client.query("BEGIN");
+
+    // 1. Obtener info del negocio + admin
     const { rows: negocioRows } = await client.query(
-      `SELECT n.nombre, u.email AS admin_email
+      `SELECT n.nombre, u.email AS admin_email, u.id_usuario
        FROM "Negocios" n
        LEFT JOIN "Personal" p ON p.id_negocio = n.id_negocio
        LEFT JOIN "Usuarios" u ON u.id_usuario = p.id_usuario
@@ -378,50 +319,51 @@ router.patch("/:id(\\d+)/reject", async (req, res) => {
     );
 
     if (!negocioRows.length) {
+      await client.query("ROLLBACK");
       client.release();
       return res.status(404).json({ error: "Negocio no encontrado" });
     }
 
     const negocio = negocioRows[0];
     const adminEmail = negocio.admin_email;
+    const idUsuarioAdmin = negocio.id_usuario;
 
-    await client.query("BEGIN");
-
-    // 2. Borrar Personal
+    // 2. BORRAR Personal
     await client.query(
       `DELETE FROM "Personal" WHERE id_negocio = $1`,
       [id]
     );
 
-    // 3. Borrar negocio
+    // 3. BORRAR Usuario Admin
+    if (idUsuarioAdmin) {
+      await client.query(
+        `DELETE FROM "Usuarios" WHERE id_usuario = $1`,
+        [idUsuarioAdmin]
+      );
+    }
+
+    // 4. BORRAR negocio
     await client.query(
       `DELETE FROM "Negocios" WHERE id_negocio = $1`,
       [id]
     );
 
-    // 4. Borrar usuarios (admins)
-    await client.query(
-      `DELETE FROM "Usuarios" 
-       WHERE id_usuario IN (
-         SELECT id_usuario FROM "Personal" WHERE id_negocio = $1
-       )`,
-      [id]
-    );
-
     await client.query("COMMIT");
 
-    // 5. Enviar correo de rechazo
-    if (adminEmail) {
-      await enviarCorreo({
-        to: adminEmail,
-        subject: "Solicitud de registro rechazada",
-        html: `
-          <h2>Tu empresa no fue aprobada ❌</h2>
-          <p>Lamentamos informarte que tu solicitud de registro para <strong>${negocio.nombre}</strong> ha sido rechazada.</p>
-          <p><strong>Motivo:</strong> ${motivo}</p>
-        `,
-      });
-    }
+    // 5. Enviar correo al dueño
+    // 5. Enviar correo al dueño
+if (adminEmail) {
+  await enviarCorreo(
+    adminEmail, 
+    "Solicitud de registro rechazada",
+    `
+      <h2>Tu empresa no fue aprobada ❌</h2>
+      <p>Lamentamos informarte que tu solicitud de registro para <strong>${negocio.nombre}</strong> ha sido rechazada.</p>
+      <p><strong>Motivo:</strong> ${motivo}</p>
+    `
+  );
+}
+
 
     client.release();
 
@@ -437,6 +379,71 @@ router.patch("/:id(\\d+)/reject", async (req, res) => {
     return res.status(500).json({ error: "Error al rechazar el negocio." });
   }
 });
+
+
+
+// APROBAR SOLICITUD DE NEGOCIO
+router.patch("/:id(\\d+)/approve", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const client = await db.pool.connect();
+
+    // 1️⃣ Obtener negocio + correo del admin (CORREGIDO)
+    const { rows: negocioRows } = await client.query(
+      `SELECT n.nombre, u.email AS admin_email
+       FROM "Negocios" n
+       LEFT JOIN "Personal" p ON p.id_negocio = n.id_negocio
+       LEFT JOIN "Usuarios" u ON u.id_usuario = p.id_usuario
+       WHERE n.id_negocio = $1
+       LIMIT 1`,
+      [id]
+    );
+
+    if (!negocioRows.length) {
+      client.release();
+      return res.status(404).json({ error: "Negocio no encontrado." });
+    }
+
+    const negocio = negocioRows[0];
+    const adminEmail = negocio.admin_email;
+
+    if (!adminEmail) {
+      client.release();
+      return res.status(400).json({ error: "El administrador no tiene correo registrado." });
+    }
+
+    // 2️⃣ Actualizar estado del negocio
+    await client.query(
+      `UPDATE "Negocios"
+       SET estado = TRUE
+       WHERE id_negocio = $1`,
+      [id]
+    );
+
+    // 3️⃣ Enviar correo al administrador
+    await enviarCorreo({
+      to: adminEmail,
+      subject: "Solicitud de registro aprobada",
+      html: `
+        <h2>🎉 Tu negocio ha sido aprobado</h2>
+        <p>¡Felicidades! Tu empresa <strong>${negocio.nombre}</strong> ya está activa dentro de NearBiz.</p>
+        <p>Ahora puedes iniciar sesión y administrar toda la información de tu negocio.</p>
+      `,
+    });
+
+    client.release();
+
+    return res.json({
+      ok: true,
+      message: "Negocio aprobado y correo enviado.",
+    });
+
+  } catch (e) {
+    console.error("❌ ERROR APPROVE:", e);
+    return res.status(500).json({ error: "Error al aprobar el negocio." });
+  }
+});
+
 
 
 // --- MiNegocio GET ---
