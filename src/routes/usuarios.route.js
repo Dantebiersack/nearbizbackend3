@@ -110,14 +110,15 @@ router.get("/:id(\\d+)", async (req, res) => {
 // POST create
 router.post("/", async (req, res) => {
   try {
-    // DTO estilo .NET
-    const dto = req.body; // { Nombre, Email, ContrasenaHash, IdRol, Token }
+    const { nombre, email, contrasenaHash, idRol, token } = req.body;
+
     const ins = await db.query(
       `INSERT INTO "Usuarios"("nombre","email","contrasena_hash","id_rol","estado","token")
        VALUES($1,$2,$3,$4,TRUE,$5)
        RETURNING "id_usuario","nombre","email","id_rol","fecha_registro","estado","token";`,
-      [dto.Nombre, dto.Email, dto.ContrasenaHash, dto.IdRol, dto.Token || null]
+      [nombre, email, contrasenaHash, idRol, token ?? null]
     );
+
     const e = ins.rows[0];
     const body = {
       IdUsuario: e.id_usuario,
@@ -134,15 +135,17 @@ router.post("/", async (req, res) => {
   }
 });
 
+
 // PUT update
 router.put("/:id(\\d+)", async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const dto = req.body; // { Nombre, Email, IdRol, Token }
+    const { nombre, email, idRol, token } = req.body;
+
     await db.query(
       `UPDATE "Usuarios" SET "nombre"=$1,"email"=$2,"id_rol"=$3,"token"=$4
        WHERE "id_usuario"=$5;`,
-      [dto.Nombre, dto.Email, dto.IdRol, dto.Token ?? null, id]
+      [nombre, email, idRol, token ?? null, id]
     );
     return noContent(res);
   } catch (e) {
