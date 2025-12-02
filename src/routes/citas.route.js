@@ -323,15 +323,16 @@ router.patch("/:id/approve", /*authRequired,*/ async function (req, res) {
 
 ////
 // Confirmar o rechazar cita, y enviar notificación Expo
-// Confirmar o rechazar cita, y enviar notificación Expo
+// PATCH /Citas/:id/estatus
 router.patch("/:id/estatus", async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const { estatus, motivo } = req.body;
+    const { estatus, motivo } = req.body; // estatus: pendiente | confirmada | rechazada | cancelada | atendida
 
-    if (!["confirmada", "rechazada"].includes(estatus)) {
+    const estatusValidos = ["pendiente", "confirmada", "rechazada", "cancelada", "atendida"];
+    if (!estatusValidos.includes(estatus)) {
       return res.status(400).json({
-        message: "Estatus no válido. Usa 'confirmada' o 'rechazada'."
+        message: "Estatus no válido. Usa: pendiente, confirmada, rechazada, cancelada o atendida.",
       });
     }
 
@@ -348,21 +349,37 @@ router.patch("/:id/estatus", async (req, res) => {
     }
 
     const cita = citaQuery.rows[0];
+    const estadoActual = cita.estado;
 
-    // 2. Actualizar cita en BD
+    // 2. Reglas de transición
+    const transiciones = {
+      pendiente: ["confirmada", "rechazada"],
+      confirmada: ["rechazada", "cancelada", "atendida"],
+      // rechazada/cancelada/atendida ya las consideramos finales (sin más cambios)
+    };
+
+    const permitidos = transiciones[estadoActual] || [];
+    if (!permitidos.includes(estatus)) {
+      return res.status(400).json({
+        message: `Transición no válida de '${estadoActual}' a '${estatus}'.`,
+      });
+    }
+
+    const motivoFinal =
+      estatus === "rechazada" || estatus === "cancelada"
+        ? motivo || "Sin motivo"
+        : null;
+
+    // 3. Actualizar cita en BD
     await db.query(
       `UPDATE "Citas"
        SET "estado"=$1,
            "motivo_cancelacion"=$2
        WHERE "id_cita"=$3`,
-      [
-        estatus,
-        estatus === "rechazada" ? motivo || "Sin motivo" : null,
-        id
-      ]
+      [estatus, motivoFinal, id]
     );
 
-    // 3. Obtener id_usuario y token del cliente (SIMPLIFICADO)
+    // 4. Obtener id_usuario y token del cliente
     const clienteQuery = await db.query(
       `SELECT cli."id_cliente", cli."id_usuario", u."token"
        FROM "Clientes" cli
@@ -379,38 +396,51 @@ router.patch("/:id/estatus", async (req, res) => {
     const pushToken = cliente.token;
     const idUsuario = cliente.id_usuario;
 
-    // 4. Enviar notificación Expo usando el id_usuario como referencia
+    // 5. Notificación Expo (opcional según estatus)
     if (pushToken) {
       try {
-        const tituloNotificacion = estatus === "confirmada" 
-          ? "¡Cita Confirmada! " 
-          : "Cita Rechazada ";
-        
-        const mensajeNotificacion = estatus === "confirmada"
-          ? "Tu cita ha sido confirmada. ¡Prepárate para tu servicio!"
-          : `Motivo: ${motivo || "No especificado"}`;
+        let tituloNotificacion = "Actualización de cita";
+        let mensajeNotificacion = "";
+
+        switch (estatus) {
+          case "confirmada":
+            tituloNotificacion = "¡Cita confirmada!";
+            mensajeNotificacion = "Tu cita ha sido confirmada. ¡Prepárate para tu servicio!";
+            break;
+          case "rechazada":
+            tituloNotificacion = "Cita rechazada";
+            mensajeNotificacion = `Motivo: ${motivoFinal}`;
+            break;
+          case "cancelada":
+            tituloNotificacion = "Cita cancelada";
+            mensajeNotificacion = `Motivo: ${motivoFinal}`;
+            break;
+          case "atendida":
+            tituloNotificacion = "Cita atendida";
+            mensajeNotificacion = "Tu cita ha sido marcada como atendida. ¡Gracias!";
+            break;
+        }
 
         await fetch("https://exp.host/--/api/v2/push/send", {
           method: "POST",
           headers: {
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
           },
           body: JSON.stringify({
             to: pushToken,
             title: tituloNotificacion,
             body: mensajeNotificacion,
             sound: "default",
-            data: { 
-              idCita: id, 
-              idUsuario: idUsuario, // Ahora incluimos el id_usuario
+            data: {
+              idCita: id,
+              idUsuario: idUsuario,
               estatus: estatus,
-              tipo: 'cita_estatus'
-            }
-          })
+              tipo: "cita_estatus",
+            },
+          }),
         });
-        
+
         console.log(`📱 Notificación enviada a usuario ${idUsuario}`);
-        
       } catch (notiError) {
         console.error(" Error enviando notificación Expo:", notiError);
       }
@@ -419,14 +449,15 @@ router.patch("/:id/estatus", async (req, res) => {
     return res.json({
       message: `Cita ${estatus}`,
       idCita: id,
-      idUsuario: idUsuario, // Devolvemos el id_usuario en la respuesta
-      notificado: !!pushToken
+      idUsuario: idUsuario,
+      notificado: !!pushToken,
     });
   } catch (e) {
     console.error("Error en PATCH /citas/:id/estatus:", e);
     return res.status(500).json({ message: "Error", detail: String(e) });
   }
 });
+
 
 // Ejemplo en el mismo router donde tienes el GET de /Citas
 router.post("/debug-sql", async (req, res) => {
