@@ -43,13 +43,12 @@ function mapToDto(r) {
     HorarioAtencion: r.horario_atencion,
     Estado: r.estado,
     LinkUrl: r.linkUrl,
-    // Campos extra del JOIN
     AdminNombre: r.admin_nombre || "Sin Asignar",
     AdminEmail: r.admin_email || ""
   };
 }
 
-// --- GET solicitudes (Negocios pendientes de aprobación) ---
+// --- GET solicitudes ---
 router.get("/solicitudes", async (req, res) => {
   try {
     const { rows } = await db.query(
@@ -61,12 +60,11 @@ router.get("/solicitudes", async (req, res) => {
   }
 });
 
-// --- GET all (Lista principal con JOIN al Admin) ---
+// --- GET all ---
 router.get("/", async (req, res) => {
   try {
     const includeInactive = (req.query.includeInactive || "false").toLowerCase() === "true";
     
-    // Usamos DISTINCT ON para evitar duplicados si hay múltiples roles admin
     let q = `
       SELECT DISTINCT ON (n."id_negocio")
         n.*,
@@ -81,7 +79,6 @@ router.get("/", async (req, res) => {
       q += ` WHERE n."estado" = TRUE`;
     }
 
-    // Ordenamos: Primero activos, luego inactivos. Y por ID.
     q += ` ORDER BY n."id_negocio", n."estado" DESC`;
 
     const { rows } = await db.query(q);
@@ -103,19 +100,18 @@ router.get("/:id(\\d+)", async (req, res) => {
   }
 });
 
-// --- CREATE (Transacción: Negocio + Usuario + Vínculo) ---
+// --- CREATE (Negocio + Usuario Admin + Personal) ---
 router.post("/", async (req, res) => {
   const client = await db.pool.connect();
   try {
     await client.query("BEGIN");
 
     const dto = req.body;
-    // Manejo seguro del horario JSON
+
     const horarioJson = dto.HorarioAtencion || dto.horarioAtencion 
       ? (typeof dto.HorarioAtencion === 'object' ? JSON.stringify(dto.HorarioAtencion) : dto.HorarioAtencion) 
       : JSON.stringify({});
 
-    // 1. Insertar Negocio
     const { rows: negocioRows } = await client.query(
       `INSERT INTO "Negocios"(
         "id_categoria","id_membresia","nombre","direccion",
@@ -135,35 +131,34 @@ router.post("/", async (req, res) => {
         dto.TelefonoContacto || dto.telefonoContacto || null,
         dto.CorreoContacto || dto.correoContacto || null,
         horarioJson,
-        false, // Se crea inactivo/pendiente
+        false,
         dto.LinkUrl || dto.linkUrl || null
       ]
     );
+
     const negocio = negocioRows[0];
 
-    // 2. Crear Usuario Admin
-    // Hasheamos la contraseña si tienes bcrypt configurado, o texto plano si es provisional
+    // 🔥 FIX: crear admin con sus datos reales, no con nombre del negocio
     let passFinal = dto.ContrasenaHash || dto.contrasena;
-    // const salt = await bcrypt.genSalt(10);
-    // passFinal = await bcrypt.hash(passFinal, salt);
 
     const { rows: userRows } = await client.query(
-      `INSERT INTO "Usuarios"("nombre", "email", "contrasena_hash", "id_rol", "estado")
-       VALUES($1, $2, $3, $4, TRUE)
+      `INSERT INTO "Usuarios"("nombre","email","contrasena_hash","id_rol","estado")
+       VALUES($1,$2,$3,$4,$5)
        RETURNING "id_usuario";`,
       [
-        dto.Nombre || dto.nombreUsuario,
-        dto.Email || dto.email,
+        dto.nombreUsuario,   // ✔ CORREGIDO
+        dto.email,           // ✔ CORREGIDO
         passFinal,
-        2 // ID Rol 2 = adminNegocio
+        2,                   // rol: adminNegocio
+        false                // ✔ NO debe iniciar sesión hasta aprobar
       ]
     );
+
     const usuario = userRows[0];
 
-    // 3. Vincular en Personal
     await client.query(
-      `INSERT INTO "Personal"("id_usuario","id_negocio", "rol_en_negocio", "estado", "fecha_registro")
-       VALUES($1,$2, 'Administrador', TRUE, CURRENT_TIMESTAMP);`,
+      `INSERT INTO "Personal"("id_usuario","id_negocio","rol_en_negocio","estado","fecha_registro")
+       VALUES($1,$2,'Administrador',TRUE,CURRENT_TIMESTAMP);`,
       [usuario.id_usuario, negocio.id_negocio]
     );
 
@@ -215,27 +210,20 @@ router.put("/:id(\\d+)", async (req, res) => {
   }
 });
 
-// --- DELETE negocio (CASCADA: Desactiva Admin y Empleados) ---
+// --- DELETE negocio ---
 router.delete("/:id(\\d+)", async (req, res) => {
   const client = await db.pool.connect();
   try {
     await client.query("BEGIN");
     const id = Number(req.params.id);
 
-    // 1. Desactivar Negocio
     await client.query(`UPDATE "Negocios" SET "estado"=FALSE WHERE "id_negocio"=$1;`, [id]);
 
-    // 2. Buscar personal asociado (Dueño + Empleados)
     const { rows } = await client.query(`SELECT "id_usuario" FROM "Personal" WHERE "id_negocio"=$1`, [id]);
     
     if (rows.length > 0) {
         const idsUsuarios = rows.map(r => r.id_usuario);
-        
-        // 3. Desactivar registros en Personal
         await client.query(`UPDATE "Personal" SET "estado"=FALSE WHERE "id_negocio"=$1;`, [id]);
-
-        // 4. Desactivar cuentas de Usuario (Login)
-        // Usamos ANY($1) para actualizar múltiples en una sola consulta de forma eficiente
         await client.query(`UPDATE "Usuarios" SET "estado"=FALSE WHERE "id_usuario" = ANY($1::int[])`, [idsUsuarios]);
     }
 
@@ -250,26 +238,20 @@ router.delete("/:id(\\d+)", async (req, res) => {
   }
 });
 
-// --- RESTORE negocio (CASCADA: Reactiva Admin y Empleados) ---
+// --- RESTORE negocio ---
 router.patch("/:id(\\d+)/restore", async (req, res) => {
   const client = await db.pool.connect();
   try {
     await client.query("BEGIN");
     const id = Number(req.params.id);
 
-    // 1. Activar Negocio
     await client.query(`UPDATE "Negocios" SET "estado"=TRUE WHERE "id_negocio"=$1;`, [id]);
 
-    // 2. Buscar personal asociado
     const { rows } = await client.query(`SELECT "id_usuario" FROM "Personal" WHERE "id_negocio"=$1`, [id]);
 
     if (rows.length > 0) {
         const idsUsuarios = rows.map(r => r.id_usuario);
-        
-        // 3. Activar registros en Personal
-        await client.query(`UPDATE "Personal" SET "estado"=TRUE WHERE "id_negocio"=$1;`, [id]);
-
-        // 4. Activar cuentas de Usuario
+        await client.query(`UPDATE "Personal" SET "estado"=TRUE WHERE "id_negocio"=$1`, [id]);
         await client.query(`UPDATE "Usuarios" SET "estado"=TRUE WHERE "id_usuario" = ANY($1::int[])`, [idsUsuarios]);
     }
 
@@ -289,32 +271,40 @@ router.patch("/:id(\\d+)/approve", async (req, res) => {
   try {
     const id = Number(req.params.id);
     
-    // Aprobamos el Negocio
     const { rows } = await db.query(
       `UPDATE "Negocios" SET "estado"=TRUE WHERE "id_negocio"=$1 RETURNING *;`,
       [id]
     );
     if (!rows.length) return res.status(404).json({ message: "No encontrado" });
 
-    // Activamos al personal (incluido el dueño) para que pueda entrar
     const personalRes = await db.query(`SELECT "id_usuario" FROM "Personal" WHERE "id_negocio"=$1`, [id]);
     if (personalRes.rows.length > 0) {
        const ids = personalRes.rows.map(r => r.id_usuario);
-       // Activamos Personal
        await db.query(`UPDATE "Personal" SET "estado"=TRUE WHERE "id_negocio"=$1`, [id]);
-       // Activamos Usuarios
        await db.query(`UPDATE "Usuarios" SET "estado"=TRUE WHERE "id_usuario" = ANY($1::int[])`, [ids]);
     }
 
-    const negocio = rows[0];
-    const asunto = "Tu empresa ha sido aprobada en NearBiz";
-    const mensaje = `
-      <p>¡Hola ${negocio.nombre}!</p>
-      <p>Tu solicitud de registro ha sido <strong>aprobada</strong>.</p>
-      <p>Usuario: ${negocio.correo_contacto}</p>
-      <p>Ahora puedes iniciar sesión en NearBiz.</p>
-    `;
-    await enviarCorreo(negocio.correo_contacto, asunto, mensaje);
+    // Obtener correo real del admin
+    const adminRes = await db.query(
+      `SELECT u.email 
+       FROM "Usuarios" u 
+       JOIN "Personal" p ON p.id_usuario = u.id_usuario
+       WHERE p.id_negocio=$1
+       LIMIT 1`,
+      [id]
+    );
+
+    const adminMail = adminRes.rows[0]?.email || rows[0].correo_contacto;
+
+    await enviarCorreo(
+      adminMail,
+      "Tu empresa ha sido aprobada en NearBiz",
+      `
+        <p>¡Hola!</p>
+        <p>Tu solicitud de registro ha sido <strong>aprobada</strong>.</p>
+        <p>Ya puedes iniciar sesión en NearBiz.</p>
+      `
+    );
 
     return noContent(res);
   } catch (e) {
@@ -322,7 +312,7 @@ router.patch("/:id(\\d+)/approve", async (req, res) => {
   }
 });
 
-// --- RECHAZAR negocio (Borrado Físico) ---
+// --- RECHAZAR negocio ---
 router.patch("/:id(\\d+)/reject", async (req, res) => {
   const client = await db.pool.connect();
   try {
@@ -331,7 +321,6 @@ router.patch("/:id(\\d+)/reject", async (req, res) => {
 
     await client.query("BEGIN");
 
-    // Obtener info antes de borrar
     const { rows: negocioRows } = await client.query(
       `SELECT n.nombre, u.email AS admin_email, u.id_usuario
        FROM "Negocios" n
@@ -351,10 +340,8 @@ router.patch("/:id(\\d+)/reject", async (req, res) => {
     const adminEmail = negocio.admin_email;
     const idUsuarioAdmin = negocio.id_usuario;
 
-    // Borrado en cascada físico
     await client.query(`DELETE FROM "Personal" WHERE id_negocio = $1`, [id]);
     if (idUsuarioAdmin) {
-        // Opcional: Borrar al usuario si solo servía para este negocio
         await client.query(`DELETE FROM "Usuarios" WHERE id_usuario = $1`, [idUsuarioAdmin]);
     }
     await client.query(`DELETE FROM "Negocios" WHERE id_negocio = $1`, [id]);
